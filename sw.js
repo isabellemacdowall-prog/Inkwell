@@ -1,8 +1,8 @@
 // Inkwell offline shell. Notebook data is synced by Firestore itself (stored in IndexedDB),
-// so this worker only caches the app files, fonts and the Firebase SDK.
-const VERSION = 'inkwell-v6';
+// so this worker only caches the app files, fonts, the Firebase SDK and the PDF libraries.
+const VERSION = 'inkwell-v7';
 const SHELL = ['./', './index.html', './manifest.webmanifest', './icon-192.png', './icon-512.png', './apple-touch-icon.png'];
-const CACHE_HOSTS = ['www.gstatic.com', 'fonts.googleapis.com', 'fonts.gstatic.com'];
+const CACHE_HOSTS = ['fonts.googleapis.com', 'fonts.gstatic.com', 'cdnjs.cloudflare.com'];
 
 self.addEventListener('install', e => {
   e.waitUntil(caches.open(VERSION).then(c => c.addAll(SHELL)).then(() => self.skipWaiting()));
@@ -31,7 +31,7 @@ self.addEventListener('fetch', e => {
 
   const sameOrigin = url.origin === self.location.origin;
   const isFirebaseSdk = url.hostname === 'www.gstatic.com' && url.pathname.startsWith('/firebasejs/');
-  if (!sameOrigin && !isFirebaseSdk && !CACHE_HOSTS.slice(1).includes(url.hostname)) return;
+  if (!sameOrigin && !isFirebaseSdk && !CACHE_HOSTS.includes(url.hostname)) return;
 
   // Static files: serve from cache, refresh in the background.
   e.respondWith(caches.open(VERSION).then(async cache => {

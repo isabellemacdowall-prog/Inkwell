@@ -254,7 +254,7 @@ svg{display:block}
 <script type="module">
 import {initializeApp} from "https://www.gstatic.com/firebasejs/10.12.2/firebase-app.js";
 import {getAuth,onAuthStateChanged,signInWithEmailAndPassword,createUserWithEmailAndPassword,sendPasswordResetEmail,signOut} from "https://www.gstatic.com/firebasejs/10.12.2/firebase-auth.js";
-import {initializeFirestore,persistentLocalCache,persistentMultipleTabManager,collection,doc,setDoc,getDoc,deleteDoc,getDocs,onSnapshot,waitForPendingWrites} from "https://www.gstatic.com/firebasejs/10.12.2/firebase-firestore.js";
+import {initializeFirestore,persistentLocalCache,persistentMultipleTabManager,collection,doc,setDoc,getDoc,deleteDoc,getDocs,Bytes,onSnapshot,waitForPendingWrites} from "https://www.gstatic.com/firebasejs/10.12.2/firebase-firestore.js";
 const firebaseConfig={
   apiKey:"AIzaSyARyi1om7ujeGqLB04B4Oxp_If20P1DtkQ",
   authDomain:"inkwell-cb087.firebaseapp.com",
@@ -345,7 +345,7 @@ async function createNotebook(){
 async function deleteNotebook(id){
   const nb=S.notebooks.get(id);S.notebooks.delete(id);renderLibrary();
   if(!S.db)return;
-  try{toast('Deleting…');const ref=S.lib.doc(id);for(const sub of ['chunks','bgs']){const snap=await ref.collection(sub).get();for(const d of snap.docs)await ref.collection(sub).doc(d.id).delete()}await ref.delete();toast('Notebook deleted')}
+  try{toast('Deleting…');const ref=S.lib.doc(id);for(const sub of ['chunks','bgs','pdf']){const snap=await ref.collection(sub).get();for(const d of snap.docs)await ref.collection(sub).doc(d.id).delete()}await ref.delete();toast('Notebook deleted')}
   catch(e){if(nb)S.notebooks.set(id,nb);renderLibrary();writeError(e)}
 }
 
@@ -398,9 +398,10 @@ function removeChunkLocal(k){const c=S.chunks.get(k);if(!c)return;const a=pageAr
 const base=$('#base'),live=$('#live'),sheet=$('#sheet'),vp=$('#vp');
 const pred=$('#pred');
 const bctx=base.getContext('2d'),lctx=live.getContext('2d',{desynchronized:true})||live.getContext('2d'),pctx=pred.getContext('2d');
-function drawTemplate(ctx,tpl,paper,pid){
+function drawTemplate(ctx,tpl,paper,pid,page){
   ctx.fillStyle=tpl==='pdf'?'#ffffff':(paper||'#fdfdfb');ctx.fillRect(0,0,PW,PH);
-  if(tpl==='pdf'){const b=bgFor(pid);if(b&&b.img){const r=Math.min(PW/b.img.naturalWidth,PH/b.img.naturalHeight);const w=b.img.naturalWidth*r,h=b.img.naturalHeight*r;ctx.drawImage(b.img,(PW-w)/2,(PH-h)/2,w,h)}else{ctx.fillStyle='#8a94a3';ctx.font='28px system-ui,sans-serif';ctx.textAlign='center';ctx.fillText(b&&b.failed?'This PDF page couldn’t be loaded':'Loading page…',PW/2,PH/2);ctx.textAlign='start'}return}
+  if(tpl==='pdf'&&page&&page.n){const c=pdfPageCanvas(page,Math.round(PW*ctx.getTransform().a));if(c){const r=Math.min(PW/c.width,PH/c.height);const w=c.width*r,h=c.height*r;ctx.imageSmoothingQuality='high';ctx.drawImage(c,(PW-w)/2,(PH-h)/2,w,h)}else{ctx.fillStyle='#8a94a3';ctx.font='28px system-ui,sans-serif';ctx.textAlign='center';ctx.fillText(pdfFailed.has(S.nbId)?'This PDF couldn’t be opened':'Loading page…',PW/2,PH/2);ctx.textAlign='start'}return}
+  if(tpl==='pdf'){const b=bgFor(pid);if(b&&b.img){ctx.imageSmoothingQuality='high';const r=Math.min(PW/b.img.naturalWidth,PH/b.img.naturalHeight);const w=b.img.naturalWidth*r,h=b.img.naturalHeight*r;ctx.drawImage(b.img,(PW-w)/2,(PH-h)/2,w,h)}else{ctx.fillStyle='#8a94a3';ctx.font='28px system-ui,sans-serif';ctx.textAlign='center';ctx.fillText(b&&b.failed?'This PDF page couldn’t be loaded':'Loading page…',PW/2,PH/2);ctx.textAlign='start'}return}
   if(tpl==='lined'){ctx.strokeStyle='#c9d6ea';ctx.lineWidth=1.3;ctx.beginPath();for(let y=150;y<PH-30;y+=38){ctx.moveTo(0,y);ctx.lineTo(PW,y)}ctx.stroke();ctx.strokeStyle='#efb3b3';ctx.beginPath();ctx.moveTo(110,0);ctx.lineTo(110,PH);ctx.stroke()}
   else if(tpl==='grid'){ctx.strokeStyle='#dfe5ee';ctx.lineWidth=1;ctx.beginPath();for(let x=20;x<PW;x+=32){ctx.moveTo(x,0);ctx.lineTo(x,PH)}for(let y=27;y<PH;y+=32){ctx.moveTo(0,y);ctx.lineTo(PW,y)}ctx.stroke()}
   else if(tpl==='dots'){ctx.fillStyle='#b4bdca';for(let y=27;y<PH;y+=32)for(let x=20;x<PW;x+=32){ctx.beginPath();ctx.arc(x,y,1.7,0,6.283);ctx.fill()}}
@@ -456,7 +457,7 @@ function bgFor(pid,nbId){
     if(S.nbId&&curPage()&&curPage().id===pid)scheduleBase();if(b.onload)b.onload();})();
   return b;
 }
-function renderPageTo(ctx,scale,page){ctx.setTransform(scale,0,0,scale,0,0);drawTemplate(ctx,page.tpl,null,page.id);for(const st of (S.strokes.get(page.id)||[]))drawStroke(ctx,st)}
+function renderPageTo(ctx,scale,page){ctx.setTransform(scale,0,0,scale,0,0);drawTemplate(ctx,page.tpl,null,page.id,page);for(const st of (S.strokes.get(page.id)||[]))drawStroke(ctx,st)}
 let pxScale=1;
 function sizeCanvases(){
   const W=sheet.clientWidth,H=sheet.clientHeight;if(!W)return;
@@ -518,8 +519,8 @@ function renderTools(){
 }
 function goPage(i){const nb=curNb();if(!nb)return;S.pageIdx=Math.max(0,Math.min(nb.pages.length-1,i));setPref('page.'+S.nbId,S.pageIdx);vp.scrollTop=0;refreshEditorChrome();scheduleBase()}
 let thumbObs=null;
-function drawThumb(c){const pg=curNb()&&curNb().pages[+c.dataset.i];if(!pg)return;const ctx=c.getContext('2d');
-  if(pg.tpl==='pdf'){const b=bgFor(pg.id);if(!b.img){ctx.setTransform(1,0,0,1,0,0);ctx.fillStyle='#fff';ctx.fillRect(0,0,200,283);b.onload=()=>{if(c.isConnected)renderPageTo(ctx,200/PW,pg)};return}}
+function drawThumb(c){const pg=curNb()&&curNb().pages[+c.dataset.i];if(!pg)return;const ctx=c.getContext('2d');c.dataset.drawn='1';c.dataset.pid=pg.id;
+  if(pg.tpl==='pdf'&&!pg.n){const b=bgFor(pg.id);if(!b.img){ctx.setTransform(1,0,0,1,0,0);ctx.fillStyle='#fff';ctx.fillRect(0,0,200,283);b.onload=()=>{if(c.isConnected)renderPageTo(ctx,200/PW,pg)};return}}
   renderPageTo(ctx,200/PW,pg)}
 function renderThumbs(){
   const nb=curNb();const box=$('#thumbs');box.replaceChildren();
@@ -536,6 +537,7 @@ function renderThumbs(){
 async function openNotebook(id){
   const nb=S.notebooks.get(id);if(!nb)return;
   if(!(history.state&&history.state.nb))history.pushState({nb:id},'');
+  pdfFailed.delete(id);if(nb.pdfParts&&S.db)pdfDoc(id).catch(()=>{});
   S.nbId=id;S.strokes=new Map();S.chunks=new Map();S.undo=new Map();S.redo=new Map();S.zoom=1;
   S.pageIdx=Math.min(pref('page.'+id,0),nb.pages.length-1);
   $('#library').hidden=true;$('#editor').hidden=false;$('#drawer').hidden=true;$('#menu').hidden=true;
@@ -704,7 +706,56 @@ const scripts=new Map();
 function loadScript(src){if(!scripts.has(src))scripts.set(src,new Promise((res,rej)=>{const t=document.createElement('script');t.src=src;t.onload=res;t.onerror=()=>{scripts.delete(src);rej(new Error('offline'))};document.head.append(t)}));return scripts.get(src)}
 const PDFJS='https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.min.js';
 const PDFJS_WORKER='https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.worker.min.js';
-const JSPDF='https://cdnjs.cloudflare.com/ajax/libs/jspdf/2.5.1/jspdf.umd.min.js';
+const PDFLIB='https://cdnjs.cloudflare.com/ajax/libs/pdf-lib/1.17.1/pdf-lib.min.js';
+const PART=900*1024;
+async function pdfjs(){await loadScript(PDFJS);const lib=window.pdfjsLib;lib.GlobalWorkerOptions.workerSrc=PDFJS_WORKER;return lib}
+// The original PDF is stored in ~900 KB parts at notebooks/{nb}/pdf/{i}.
+async function pdfBytes(nbId){
+  const snap=await S.lib.doc(nbId).collection('pdf').get();
+  const parts=snap.docs.map(d=>d.data()).sort((a,b)=>a.i-b.i).map(d=>d.b.toUint8Array());
+  const nb=S.notebooks.get(nbId);if(!parts.length||(nb&&nb.pdfParts&&parts.length!==nb.pdfParts))throw new Error('missing');
+  const out=new Uint8Array(parts.reduce((t,p)=>t+p.length,0));let o=0;for(const p of parts){out.set(p,o);o+=p.length}return out;
+}
+const pdfDocs=new Map(),pdfFailed=new Set();
+function pdfDoc(nbId){
+  if(!pdfDocs.has(nbId))pdfDocs.set(nbId,(async()=>{const lib=await pdfjs();const bytes=await pdfBytes(nbId);return lib.getDocument({data:bytes,isEvalSupported:false}).promise})()
+    .catch(e=>{pdfDocs.delete(nbId);pdfFailed.add(nbId);if(S.nbId===nbId)scheduleBase();throw e}));
+  return pdfDocs.get(nbId);
+}
+// Rendered pages are cached by size. Big (page view) renders keep only a few; thumbnails keep more.
+const pdfBig=new Map(),pdfSmall=new Map(),pdfWanted=new Map(),pdfPending=new Set();let pdfQueue=Promise.resolve();
+function pdfPageCanvas(pg,devW){
+  const small=devW<=400,cache=small?pdfSmall:pdfBig,key=S.nbId+'|'+pg.id+'|'+devW;
+  if(cache.has(key)){const c=cache.get(key);cache.delete(key);cache.set(key,c);return c}
+  if(!small)pdfWanted.set(pg.id,devW);
+  if(!pdfPending.has(key)&&!pdfFailed.has(S.nbId)){
+    pdfPending.add(key);const nbId=S.nbId;
+    pdfQueue=pdfQueue.then(async()=>{
+      try{
+        if(S.nbId!==nbId||(!small&&pdfWanted.get(pg.id)!==devW))return;
+        const doc=await pdfDoc(nbId);const page=await doc.getPage(pg.n);const v1=page.getViewport({scale:1});
+        const r=Math.min(devW/v1.width,devW*PH/PW/v1.height);const vpt=page.getViewport({scale:r});
+        const c=document.createElement('canvas');c.width=Math.max(1,Math.round(vpt.width));c.height=Math.max(1,Math.round(vpt.height));
+        const x=c.getContext('2d');x.fillStyle='#fff';x.fillRect(0,0,c.width,c.height);
+        await page.render({canvasContext:x,viewport:vpt}).promise;
+        cache.set(key,c);const keep=small?80:4;while(cache.size>keep)cache.delete(cache.keys().next().value);
+        if(S.nbId===nbId){
+          if(!small&&curPage()&&curPage().id===pg.id)scheduleBase();
+          if(small)document.querySelectorAll('#thumbs canvas').forEach(t=>{if(t.dataset.pid===pg.id&&t.dataset.drawn)drawThumb(t)});
+        }
+      }catch(e){}
+      finally{pdfPending.delete(key)}
+    });
+  }
+  // Until the right size is ready, show the closest one already rendered.
+  let best=null;for(const [k,c] of cache)if(k.startsWith(S.nbId+'|'+pg.id+'|'))best=c;
+  if(!best&&!small)for(const [k,c] of pdfSmall)if(k.startsWith(S.nbId+'|'+pg.id+'|'))best=c;
+  return best;
+}
+async function pdfPageCanvasNow(pg,devW){
+  const key=S.nbId+'|'+pg.id+'|'+devW,cache=devW<=400?pdfSmall:pdfBig;
+  for(let i=0;i<300;i++){pdfPageCanvas(pg,devW);if(cache.has(key))return cache.get(key);if(pdfFailed.has(S.nbId))break;await new Promise(r=>setTimeout(r,50))}
+  throw new Error('pdf')}
 let busy=false,importingId=null;
 async function wakeLock(){try{return navigator.wakeLock?await navigator.wakeLock.request('screen'):null}catch(e){return null}}
 function progress(title,detail,frac){const p=$('#progress');if(!title){p.hidden=true;return}
@@ -712,78 +763,112 @@ function progress(title,detail,frac){const p=$('#progress');if(!title){p.hidden=
 
 $('#mExport').onclick=()=>{$('#menu').hidden=true;const pg=curPage();const c=document.createElement('canvas');c.width=1600;c.height=Math.round(1600*PH/PW);
   const go=()=>{renderPageTo(c.getContext('2d'),1600/PW,pg);c.toBlob(b=>saveFile(safeName(curNb().title)+' - page '+(S.pageIdx+1)+'.png',b),'image/png')};
-  if(pg.tpl==='pdf'){const bg=bgFor(pg.id);(bg.img?Promise.resolve():bg.ready).then(go)}else go()};
+  if(pg.tpl==='pdf'&&pg.n){pdfWanted.set(pg.id,1600);pdfPageCanvasNow(pg,1600).then(go).catch(()=>toast('Couldn’t load this page. Check your connection.'))}
+  else if(pg.tpl==='pdf'){const bg=bgFor(pg.id);(bg.img?Promise.resolve():bg.ready).then(go)}else go()};
 
+const hexRgb=h=>{const n=parseInt(h.slice(1),16);return[(n>>16&255)/255,(n>>8&255)/255,(n&255)/255]};
+// Draws one page's handwriting into a pdf-lib page. map(x,y) turns page units into PDF points; k scales widths.
+function inkToPdf(L,page,strokes,map,k){
+  const {pushGraphicsState,popGraphicsState,setLineCap,setLineJoin,setLineWidth,setStrokingRgbColor,moveTo,lineTo,appendBezierCurve,stroke,LineCapStyle,LineJoinStyle,rgb,BlendMode}=L;
+  const ops=[pushGraphicsState(),setLineCap(LineCapStyle.Round),setLineJoin(LineJoinStyle.Round)];
+  for(const st of strokes){
+    if(st.t==='h')continue;
+    const p=st.p,U=UNITS(st),Q=LEVELS(st),n=p.length/3;const [r,g,b]=hexRgb(st.c);ops.push(setStrokingRgbColor(r,g,b));
+    const P=j=>[p[j*3]/U,p[j*3+1]/U];
+    if(n===1){const [x,y]=map(...P(0));ops.push(setLineWidth(penWidth(st,p[2]/Q)*k),moveTo(x,y),lineTo(x+.01,y),stroke());continue}
+    for(let j=1;j<n;j++){
+      const [px,py]=P(j-1),[x,y]=P(j);const m=j>1?[(p[j*3-6]/U+px)/2,(p[j*3-5]/U+py)/2]:[px,py];const e=[(px+x)/2,(py+y)/2];
+      const A=map(...m),C=map(px,py),E=map(...e);
+      ops.push(setLineWidth(penWidth(st,(p[j*3-1]+p[j*3+2])/2/Q)*k),moveTo(A[0],A[1]),
+        appendBezierCurve(A[0]+2/3*(C[0]-A[0]),A[1]+2/3*(C[1]-A[1]),E[0]+2/3*(C[0]-E[0]),E[1]+2/3*(C[1]-E[1]),E[0],E[1]),stroke());
+    }
+    const [lx,ly]=P(n-1),A=map((p[n*3-6]/U+lx)/2,(p[n*3-5]/U+ly)/2),B=map(lx,ly);
+    ops.push(setLineWidth(penWidth(st,p[n*3-1]/Q)*k),moveTo(A[0],A[1]),lineTo(B[0],B[1]),stroke());
+  }
+  ops.push(popGraphicsState());page.pushOperators(...ops);
+  for(const st of strokes){
+    if(st.t!=='h')continue;
+    const p=st.p,U=UNITS(st),n=p.length/3;let d='';
+    for(let j=0;j<n;j++){const [x,y]=map(p[j*3]/U,p[j*3+1]/U);d+=(j?'L':'M')+x.toFixed(2)+' '+(-y).toFixed(2)+' '}
+    if(n===1){const [x,y]=map(p[0]/U,p[1]/U);d+='L'+(x+.1).toFixed(2)+' '+(-y).toFixed(2)}
+    const [r,g,b]=hexRgb(st.c);
+    page.drawSvgPath(d,{x:0,y:0,borderColor:rgb(r,g,b),borderWidth:st.w*k,borderOpacity:.42,blendMode:BlendMode.Multiply,borderLineCap:LineCapStyle.Round});
+  }
+}
+function paperToPdf(L,page,tpl,k,H){
+  const {rgb}=L;const line=(x1,y1,x2,y2,c,w)=>page.drawLine({start:{x:x1*k,y:H-y1*k},end:{x:x2*k,y:H-y2*k},thickness:w*k,color:rgb(...c)});
+  if(tpl==='lined'){for(let y=150;y<PH-30;y+=38)line(0,y,PW,y,[.79,.84,.92],1.3);line(110,0,110,PH,[.94,.70,.70],1.3)}
+  else if(tpl==='grid'){for(let x=20;x<PW;x+=32)line(x,0,x,PH,[.87,.9,.93],1);for(let y=27;y<PH;y+=32)line(0,y,PW,y,[.87,.9,.93],1)}
+  else if(tpl==='dots'){for(let y=27;y<PH;y+=32)for(let x=20;x<PW;x+=32)page.drawCircle({x:x*k,y:H-y*k,size:1.7*k,color:rgb(.71,.74,.79)})}
+}
 $('#mPdf').onclick=async()=>{
   $('#menu').hidden=true;if(busy)return;busy=true;
-  const nb=curNb(),id=S.nbId;
+  const nb=curNb(),id=S.nbId;let lock=null;
   try{
-    progress('Preparing PDF','',0);
-    await loadScript(JSPDF);
-    const pdf=new window.jspdf.jsPDF({unit:'pt',format:'a4',compress:true});
-    const c=document.createElement('canvas');c.width=1400;c.height=1980;const ctx=c.getContext('2d');const lock=await wakeLock();
-    try{for(let i=0;i<nb.pages.length;i++){
+    progress('Preparing PDF','',0);lock=await wakeLock();
+    await loadScript(PDFLIB);const L=window.PDFLib;
+    const out=await L.PDFDocument.create();out.setTitle(nb.title||'Notebook');out.setCreator('Inkwell');
+    let copied=new Map();
+    if(nb.pdfParts){
+      const src=await L.PDFDocument.load(await pdfBytes(id),{ignoreEncryption:true});
+      const want=[...new Set(nb.pages.filter(p=>p.tpl==='pdf'&&p.n).map(p=>p.n-1))].filter(i=>i<src.getPageCount());
+      const pages=await out.copyPages(src,want);want.forEach((i,j)=>copied.set(i+1,pages[j]));
+    }
+    const A4W=595.28,A4H=841.89;
+    for(let i=0;i<nb.pages.length;i++){
       if(S.nbId!==id)return;
-      const pg=nb.pages[i];
-      if(pg.tpl==='pdf'){const b=bgFor(pg.id);if(!b.img)await b.ready}
-      renderPageTo(ctx,1400/PW,pg);
-      if(i)pdf.addPage('a4','portrait');
-      pdf.addImage(c.toDataURL('image/jpeg',.85),'JPEG',0,0,595.28,841.89,undefined,'FAST');
-      if(nb.pages.length>3)progress('Preparing PDF','page '+(i+1)+' of '+nb.pages.length,(i+1)/nb.pages.length);
-    }}finally{lock&&lock.release().catch(()=>{});progress()}
-    await saveFile(safeName(nb.title)+'.pdf',pdf.output('blob'));
-  }catch(e){toast(e&&e.message==='offline'?'Connect to the internet to create a PDF, then try again.':'Couldn’t create the PDF. Try again.')}
-  finally{busy=false}
+      const pg=nb.pages[i],strokes=S.strokes.get(pg.id)||[];
+      if(pg.tpl==='pdf'&&pg.n&&copied.has(pg.n)){
+        const page=copied.get(pg.n);copied.delete(pg.n);out.addPage(page);
+        const cb=page.getCropBox(),W=cb.width,H=cb.height,r=Math.min(PW/W,PH/H),ox=(PW-W*r)/2,oy=(PH-H*r)/2;
+        inkToPdf(L,page,strokes,(x,y)=>[cb.x+(x-ox)/r,cb.y+H-(y-oy)/r],1/r);
+      }else{
+        const page=out.addPage([A4W,A4H]);const k=A4W/PW;
+        if(pg.tpl==='pdf'&&!pg.n){const b=bgFor(pg.id);if(!b.img)await b.ready;const snap=await S.lib.doc(id).collection('bgs').doc(pg.id).get();
+          if(snap.exists()){const img=await out.embedJpg(snap.data().img);const r=Math.min(A4W/img.width,A4H/img.height);page.drawImage(img,{x:(A4W-img.width*r)/2,y:(A4H-img.height*r)/2,width:img.width*r,height:img.height*r})}}
+        else paperToPdf(L,page,pg.tpl,k,A4H);
+        inkToPdf(L,page,strokes,(x,y)=>[x*k,A4H-y*k],k);
+      }
+      if(nb.pages.length>3&&i%5===0)progress('Preparing PDF','page '+(i+1)+' of '+nb.pages.length,(i+1)/nb.pages.length);
+    }
+    progress('Preparing PDF','Saving…',1);
+    const bytes=await out.save();
+    await saveFile(safeName(nb.title)+'.pdf',new Blob([bytes],{type:'application/pdf'}));
+  }catch(e){console.error(e);toast(e&&e.message==='offline'?'Connect to the internet to create a PDF, then try again.':'Couldn’t create the PDF. Try again.')}
+  finally{busy=false;progress();lock&&lock.release().catch(()=>{})}
 };
 
 $('#importPdf').onclick=()=>{if(busy)return toast('An import is already running.');$('#pdfInput').value='';$('#pdfInput').click()};
 $('#pdfInput').onchange=async()=>{
   const file=$('#pdfInput').files[0];if(!file)return;
   if(!S.db)return toast('Sign in first to import a PDF.');
-  busy=true;const id='nb'+newId();let pages=[],started=false,lock=null;
+  if(file.size>300*1024*1024)return toast('That PDF is over 300 MB. Compress or split it, then import it.');
+  busy=true;const id='nb'+newId();let written=0,lock=null;
   const title=file.name.replace(/\.pdf$/i,'')||'Imported PDF';
-  const color=COVERS[Math.floor(Math.random()*COVERS.length)],created=Date.now();
-  const saveMeta=done=>saveNb(id,{title,color,tpl:'blank',pdf:true,pages:pages.slice(),created,updated:Date.now(),importing:!done});
   try{
     progress('Opening '+file.name,'',0);
-    await loadScript(PDFJS);
-    const lib=window.pdfjsLib;lib.GlobalWorkerOptions.workerSrc=PDFJS_WORKER;
-    const doc=await lib.getDocument({data:new Uint8Array(await file.arrayBuffer())}).promise;
-    const n=doc.numPages;if(n>1000)throw new Error('toolong');
-    if(n>60&&!await confirmBox('Import '+n+' pages?','This takes about '+Math.max(2,Math.round(n/50))+'–'+Math.max(3,Math.round(n/25))+' minutes. Keep Inkwell open and the screen on until it finishes. Pages you’ve imported are kept even if it stops part-way.','Import'))return;
-    lock=await wakeLock();importingId=id;started=true;saveMeta(false);
-    const c=document.createElement('canvas');const ctx=c.getContext('2d');
-    const inflight=new Set();const t0=Date.now();
-    for(let i=1;i<=n;i++){
-      if(i>3){const left=Math.round((Date.now()-t0)/(i-1)*(n-i+1)/60000);progress('Importing '+title,'Page '+i+' of '+n+(left>=1?' · about '+left+' min left':''),(i-1)/n)}
-      else progress('Importing '+title,'Page '+i+' of '+n,(i-1)/n);
-      const page=await doc.getPage(i);const v1=page.getViewport({scale:1});
-      // About 2400px on the long side matches an iPad's screen, so text stays crisp. Each page must stay under
-      // Firestore's 1 MB document limit, so busy pages step down in quality and then size.
-      let scale=2400/Math.max(v1.width,v1.height),img;
-      for(const q of [.86,.78,.7,.62,.55]){
-        const vp=page.getViewport({scale});c.width=Math.round(vp.width);c.height=Math.round(vp.height);
-        ctx.fillStyle='#fff';ctx.fillRect(0,0,c.width,c.height);
-        await page.render({canvasContext:ctx,viewport:vp}).promise;
-        img=c.toDataURL('image/jpeg',q);if(img.length<950000)break;if(q<.75)scale*=.88;
-      }
-      page.cleanup();
-      const pid='pg'+newId();
-      const w=S.lib.doc(id).collection('bgs').doc(pid).set({img,w:c.width,h:c.height}).then(()=>inflight.delete(w));
-      inflight.add(w);pages.push({id:pid,tpl:'pdf'});
-      if(inflight.size>=4)await Promise.race(inflight);
-      if(i%15===0)saveMeta(false);
+    const bytes=new Uint8Array(await file.arrayBuffer());
+    const lib=await pdfjs();
+    const doc=await lib.getDocument({data:bytes.slice(),isEvalSupported:false}).promise;
+    const n=doc.numPages;await doc.destroy();
+    lock=await wakeLock();importingId=id;
+    const parts=Math.ceil(bytes.length/PART);const inflight=new Set();
+    for(let i=0;i<parts;i++){
+      const w=S.lib.doc(id).collection('pdf').doc(String(i).padStart(4,'0')).set({i,b:Bytes.fromUint8Array(bytes.subarray(i*PART,(i+1)*PART))}).then(()=>{inflight.delete(w);written++;
+        progress('Importing '+title,n+' pages · uploading '+Math.round(written/parts*100)+'%',written/parts)});
+      inflight.add(w);if(inflight.size>=3)await Promise.race(inflight);
     }
     await Promise.all(inflight);
-    await doc.destroy();
-    saveMeta(true);importingId=null;renderLibrary();
+    const pages=[];for(let i=1;i<=n;i++)pages.push({id:'pg'+newId(),tpl:'pdf',n:i});
+    const now=Date.now();
+    await saveNb(id,{title,color:COVERS[Math.floor(Math.random()*COVERS.length)],tpl:'blank',pdf:true,pdfParts:parts,pages,created:now,updated:now});
     toast('Imported '+n+(n===1?' page':' pages'));
     openNotebook(id);
   }catch(e){
-    const m=e&&e.message;importingId=null;
-    if(started&&pages.length)saveMeta(false);
-    toast(m==='offline'?'Connect to the internet to import a PDF, then try again.':m==='toolong'?'That PDF has more than 1,000 pages. Split it into smaller files and import each one.':e&&e.name==='PasswordException'?'That PDF is password-protected. Remove the password and try again.':e&&e.code==='resource-exhausted'?'Your Firebase storage allowance is used up for today. The pages imported so far are saved.':started?'The import stopped part-way. The pages imported so far are saved in the notebook.':'Couldn’t import that PDF. Check it opens on this device and try again.');
-  }finally{busy=false;progress();lock&&lock.release().catch(()=>{});renderLibrary()}
+    console.error(e);
+    toast(e&&e.message==='offline'?'Connect to the internet to import a PDF, then try again.':e&&e.name==='PasswordException'?'That PDF is password-protected. Remove the password and try again.':e&&e.code==='resource-exhausted'?'Your Firebase storage allowance is used up for today. Try again tomorrow.':'Couldn’t import that PDF. Check it opens on this device and try again.');
+    if(written){const ref=S.lib.doc(id).collection('pdf');ref.get().then(sn=>sn.docs.forEach(d=>ref.doc(d.id).delete())).catch(()=>{})}
+  }finally{busy=false;importingId=null;progress();lock&&lock.release().catch(()=>{});renderLibrary()}
 };
 
 /* Home-screen install: iPad/iPhone Safari gets instructions, Chrome/Android/desktop get an Install button */
