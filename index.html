@@ -625,23 +625,56 @@ function undoRedo(isUndo){
   scheduleBase();refreshEditorChrome();
 }
 
-function touchPan(e){const t=touches.get(e.pointerId);if(!t)return;const nx=e.clientX,ny=e.clientY;
-  if(touches.size>=2){const pts=[...touches.values()];const [a,b]=pts;const d0=Math.hypot(a.x-b.x,a.y-b.y);const m0=[(a.x+b.x)/2,(a.y+b.y)/2];
-    t.x=nx;t.y=ny;const [c,d]=[...touches.values()];const d1=Math.hypot(c.x-d.x,c.y-d.y);const m1=[(c.x+d.x)/2,(c.y+d.y)/2];
-    if(d0>10)setZoom(S.zoom*d1/d0,m1[0],m1[1]);vp.scrollLeft-=m1[0]-m0[0];vp.scrollTop-=m1[1]-m0[1];}
-  else{vp.scrollLeft-=nx-t.x;vp.scrollTop-=ny-t.y;t.x=nx;t.y=ny}
+/* Finger scrolling and pinch zoom.
+   While pinching, the page is only scaled with a GPU transform (cheap, smooth); it is laid out and
+   redrawn sharp once, when the fingers lift. One-finger scrolls keep a little momentum. */
+let pinch=null,fling=0;
+function stopFling(){if(fling){cancelAnimationFrame(fling);fling=0}}
+function pinchPoints(){const [a,b]=[...touches.values()];return{d:Math.hypot(a.x-b.x,a.y-b.y)||1,m:[(a.x+b.x)/2,(a.y+b.y)/2]}}
+function pinchStart(){
+  const {d,m}=pinchPoints(),r=sheet.getBoundingClientRect();
+  pinch={d0:d,m0:m,m,s:1};
+  sheet.style.transformOrigin=(m[0]-r.left)+'px '+(m[1]-r.top)+'px';sheet.style.willChange='transform';
+}
+function pinchMove(){
+  const {d,m}=pinchPoints();
+  const z=Math.max(.5,Math.min(4,S.zoom*d/pinch.d0));pinch.s=z/S.zoom;pinch.m=m;
+  sheet.style.transform='translate('+(m[0]-pinch.m0[0])+'px,'+(m[1]-pinch.m0[1])+'px) scale('+pinch.s+')';
+}
+function pinchEnd(){
+  const p=pinch;pinch=null;if(!p)return;
+  sheet.style.transform='';sheet.style.willChange='';sheet.style.transformOrigin='';
+  if(Math.abs(p.s-1)>.005)setZoom(S.zoom*p.s,p.m0[0],p.m0[1]);
+  vp.scrollLeft-=p.m[0]-p.m0[0];vp.scrollTop-=p.m[1]-p.m0[1];
+  for(const t of touches.values()){t.vx=0;t.vy=0}
+}
+function touchPan(e){
+  const t=touches.get(e.pointerId);if(!t)return;
+  const nx=e.clientX,ny=e.clientY,dt=Math.max(1,e.timeStamp-(t.t||e.timeStamp-16));
+  if(touches.size>=2){t.x=nx;t.y=ny;t.t=e.timeStamp;if(!pinch)pinchStart();pinchMove();return}
+  const dx=nx-t.x,dy=ny-t.y;vp.scrollLeft-=dx;vp.scrollTop-=dy;
+  t.vx=(t.vx||0)*.6+dx/dt*.4;t.vy=(t.vy||0)*.6+dy/dt*.4;t.x=nx;t.y=ny;t.t=e.timeStamp;
+}
+function startFling(vx,vy){
+  stopFling();if(Math.hypot(vx,vy)<.25)return;
+  let last=performance.now();
+  const step=now=>{const dt=Math.min(40,now-last);last=now;
+    vp.scrollLeft-=vx*dt;vp.scrollTop-=vy*dt;const f=Math.pow(.996,dt);vx*=f;vy*=f;
+    fling=Math.hypot(vx,vy)>.03?requestAnimationFrame(step):0};
+  fling=requestAnimationFrame(step);
 }
 vp.addEventListener('pointerdown',e=>{
   if(e.button>0)return;
   if(e.pointerType==='pen'){
-    penDown=true;
+    penDown=true;if(pinch)pinchEnd();
     if(!S.penOnly){S.penOnly=true;setPref('penOnly',true);if(S.tool==='hand')S.tool='p';renderTools();toast('Pencil detected. Fingers now scroll and zoom; switch off “Pencil only” to draw with a finger.')}
     touches.clear();if(drawing&&drawing.touch)endDraw(true);
     return startDraw(e);
   }
+  stopFling();
   if(e.pointerType==='touch'){
     if(penDown)return;
-    touches.set(e.pointerId,{x:e.clientX,y:e.clientY});try{vp.setPointerCapture(e.pointerId)}catch(_){}
+    touches.set(e.pointerId,{x:e.clientX,y:e.clientY,t:e.timeStamp,vx:0,vy:0});try{vp.setPointerCapture(e.pointerId)}catch(_){}
     if(drawing&&drawing.touch){if(touches.size>=2){const keep=performance.now()-drawing.t0>350&&drawing.st&&drawing.st.p.length>30;endDraw(!keep)}return}
     if(touches.size===1&&!S.penOnly&&S.tool!=='hand'){touches.delete(e.pointerId);return startDraw(e)}
     return;
@@ -657,7 +690,9 @@ vp.addEventListener('pointermove',e=>{
 const up=e=>{
   if(e.pointerType==='pen')penDown=false;
   if(drawing&&drawing.id===e.pointerId)endDraw(e.type==='pointercancel'&&!!drawing.st);
-  if(touches.has(e.pointerId)){touches.delete(e.pointerId);if(!touches.size)scheduleBase()}
+  if(touches.has(e.pointerId)){const t=touches.get(e.pointerId);touches.delete(e.pointerId);
+    if(pinch&&touches.size<2)pinchEnd();
+    else if(!touches.size&&e.type==='pointerup'&&e.timeStamp-(t.t||0)<60)startFling(t.vx||0,t.vy||0);}
   if(gesture&&gesture.id===e.pointerId)gesture=null;
 };
 vp.addEventListener('pointerup',up);vp.addEventListener('pointercancel',up);
