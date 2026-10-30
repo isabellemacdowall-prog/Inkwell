@@ -251,7 +251,7 @@ svg{display:block}
         <button id="mExport" type="button">Save page as image</button>
         <button id="mRename" type="button">Rename notebook</button>
         <button id="mDelPage" class="danger" type="button">Delete this page</button>
-        <div class="lbl" style="text-transform:none;letter-spacing:0">Inkwell version 16</div>
+        <div class="lbl" style="text-transform:none;letter-spacing:0">Inkwell version 17</div>
       </div>
     </div>
   </section>
@@ -585,6 +585,7 @@ async function closeNotebook(){
 
 /* ---------- input ---------- */
 let drawing=null;const touches=new Map();let gesture=null,penDown=false;
+const penIsDown=()=>penDown&&performance.now()-lastPen<1200;
 function toPage(e,r){return[(e.clientX-r.left)/r.width*PW,(e.clientY-r.top)/r.height*PH]}
 function pushPoint(st,x,y,pr){const p=st.p,L=p.length;const X=Math.round(x*8),Y=Math.round(y*8),P=Math.max(0,Math.min(100,Math.round(pr*100)));
   if(L&&Math.abs(p[L-3]-X)<3&&Math.abs(p[L-2]-Y)<3){if(P>p[L-1])p[L-1]=P;return}p.push(X,Y,P)}
@@ -690,18 +691,19 @@ function touchPan(e){
 /* Palm rejection for the floating controls (page counter, arrows, add page, zoom).
    A touch there is ignored if the Pencil is down or was used in the last 1.5 s, if the touch is
    large (a palm), held for a long time, or slid. A quick, deliberate finger tap still works. */
-let lastPen=0,ctlDown=null;
+let lastPen=-1e9,ctlDown=null;
 addEventListener('pointerdown',e=>{if(e.pointerType==='pen')lastPen=performance.now()},true);
 addEventListener('pointermove',e=>{if(e.pointerType==='pen')lastPen=performance.now()},true);
-addEventListener('pointerup',e=>{if(e.pointerType==='pen')lastPen=performance.now()},true);
+addEventListener('pointerup',e=>{if(e.pointerType==='pen'){lastPen=performance.now();penDown=false}},true);
+addEventListener('pointercancel',e=>{if(e.pointerType==='pen')penDown=false},true);
 let synthClick=false;
 for(const box of document.querySelectorAll('.pager,.zoom')){
   // Stops iPadOS long-press text selection, the magnifier and the Copy/Look Up bar on these controls.
   box.addEventListener('touchstart',e=>{if(e.cancelable)e.preventDefault()},{passive:false});
-  box.addEventListener('pointerdown',e=>{ctlDown={type:e.pointerType,t:performance.now(),x:e.clientX,y:e.clientY,big:Math.max(e.width||0,e.height||0)>32,pen:penDown||performance.now()-lastPen<1500,btn:e.target.closest('button')}},true);
+  box.addEventListener('pointerdown',e=>{ctlDown={type:e.pointerType,t:performance.now(),x:e.clientX,y:e.clientY,big:Math.max(e.width||0,e.height||0)>32,pen:penIsDown()||performance.now()-lastPen<1500,btn:e.target.closest('button')}},true);
   box.addEventListener('pointerup',e=>{
     const d=ctlDown;if(!d||e.pointerType!=='touch')return;ctlDown=null;
-    const ok=!d.big&&!d.pen&&!penDown&&performance.now()-lastPen>=1500&&Math.hypot(e.clientX-d.x,e.clientY-d.y)<=12&&performance.now()-d.t<=450;
+    const ok=!d.big&&!d.pen&&!penIsDown()&&performance.now()-lastPen>=1500&&Math.hypot(e.clientX-d.x,e.clientY-d.y)<=12&&performance.now()-d.t<=450;
     if(ok&&d.btn&&!(S.locked&&box.classList.contains('pager'))){synthClick=true;try{d.btn.click()}finally{synthClick=false}}
   },true);
   box.addEventListener('click',e=>{
@@ -754,7 +756,10 @@ vp.addEventListener('pointerdown',e=>{
   }
   stopFling();
   if(e.pointerType==='touch'){
-    if(penDown)return;
+    const now=e.timeStamp;for(const [id,o] of touches)if(now-(o.t||0)>1500&&id!==e.pointerId)touches.delete(id);
+    if(pinch&&touches.size<1)pinchEnd();
+    if(penIsDown())return;
+    penDown=false;
     touches.set(e.pointerId,{x:e.clientX,y:e.clientY,sx:e.clientX,sy:e.clientY,t:e.timeStamp,vx:0,vy:0});try{vp.setPointerCapture(e.pointerId)}catch(_){}
     if(drawing&&drawing.touch){if(touches.size>=2){const keep=performance.now()-drawing.t0>350&&drawing.st&&drawing.st.p.length>30;endDraw(!keep)}return}
     if(touches.size===1&&!S.penOnly&&S.tool!=='hand'){touches.delete(e.pointerId);return startDraw(e)}
@@ -789,6 +794,8 @@ vp.addEventListener('wheel',e=>{
 },{passive:false});
 ['gesturestart','gesturechange','contextmenu'].forEach(t=>vp.addEventListener(t,e=>e.preventDefault()));
 ['touchstart','touchmove'].forEach(t=>vp.addEventListener(t,e=>{if(e.cancelable)e.preventDefault()},{passive:false}));
+function resetInput(){if(drawing)endDraw(!drawing.st||drawing.st.p.length<6);touches.clear();if(pinch)pinchEnd();penDown=false;gesture=null;sheet.style.transform='';sheet.style.transition=''}
+document.addEventListener('visibilitychange',()=>{if(document.hidden)resetInput()});addEventListener('blur',resetInput);
 // Backstop: if the stroke's end is delivered somewhere other than the page, still finish it.
 addEventListener('pointerup',e=>{if(drawing&&drawing.id===e.pointerId)up(e)});
 addEventListener('pointercancel',e=>{if(drawing&&drawing.id===e.pointerId)up(e)});
