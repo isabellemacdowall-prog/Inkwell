@@ -644,6 +644,9 @@ function pinchMove(){
 }
 function pinchEnd(){
   const p=pinch;pinch=null;if(!p)return;
+  const mdx=p.m[0]-p.m0[0],mdy=p.m[1]-p.m0[1];
+  if(Math.abs(p.s-1)<.06&&Math.abs(mdx)>90&&Math.abs(mdx)>Math.abs(mdy)*1.3){
+    sheet.style.willChange='';sheet.style.transformOrigin='';sheet.style.transform='translateX('+mdx+'px)';turnPage(mdx<0?1:-1);return}
   const before=sheet.getBoundingClientRect();
   sheet.style.transform='';sheet.style.willChange='';sheet.style.transformOrigin='';
   if(Math.abs(p.s-1)>.005)setZoom(S.zoom*p.s,p.m0[0],p.m0[1]);
@@ -660,9 +663,32 @@ function pinchEnd(){
 function touchPan(e){
   const t=touches.get(e.pointerId);if(!t)return;
   const nx=e.clientX,ny=e.clientY,dt=Math.max(1,e.timeStamp-(t.t||e.timeStamp-16));
-  if(touches.size>=2){t.x=nx;t.y=ny;t.t=e.timeStamp;if(!pinch)pinchStart();pinchMove();return}
+  if(touches.size>=2){t.x=nx;t.y=ny;t.t=e.timeStamp;if(t.axis==='swipe'){t.axis='pan';sheet.style.transform=''}if(!pinch)pinchStart();pinchMove();return}
+  if(!t.axis){const ax=nx-t.sx,ay=ny-t.sy;if(Math.hypot(ax,ay)<10)return;
+    t.axis=Math.abs(ax)>Math.abs(ay)*1.3&&noHScroll()?'swipe':'pan';if(t.axis==='swipe')sheet.style.transition='none'}
+  if(t.axis==='swipe'){const ddx=nx-t.x;t.dx=swipeMove(t,nx);t.vx=(t.vx||0)*.6+ddx/dt*.4;t.x=nx;t.y=ny;t.t=e.timeStamp;return}
   const dx=nx-t.x,dy=ny-t.y;vp.scrollLeft-=dx;vp.scrollTop-=dy;
   t.vx=(t.vx||0)*.6+dx/dt*.4;t.vy=(t.vy||0)*.6+dy/dt*.4;t.x=nx;t.y=ny;t.t=e.timeStamp;
+}
+/* Page turning by swipe */
+const noHScroll=()=>vp.scrollWidth<=vp.clientWidth+2;
+function settleSheet(){requestAnimationFrame(()=>requestAnimationFrame(()=>{sheet.style.transition='transform .24s cubic-bezier(.2,.8,.2,1)';sheet.style.transform='';setTimeout(()=>{if(!pinch)sheet.style.transition=''},280)}))}
+function turnPage(dir){
+  const nb=curNb();const ni=S.pageIdx+dir;
+  if(!nb||ni<0||ni>=nb.pages.length){settleSheet();return}
+  const W=vp.clientWidth;
+  sheet.style.transition='transform .15s ease-in';sheet.style.transform='translateX('+(-dir*W)+'px)';
+  setTimeout(()=>{sheet.style.transition='none';goPage(ni);sheet.style.transform='translateX('+(dir*W*.6)+'px)';settleSheet()},150);
+}
+function swipeMove(t,nx){
+  let dx=nx-t.sx;const nb=curNb();
+  if((dx>0&&S.pageIdx===0)||(dx<0&&nb&&S.pageIdx>=nb.pages.length-1))dx*=.3;
+  sheet.style.transform='translateX('+dx+'px)';return dx;
+}
+function swipeEnd(t){
+  const dx=t.dx||0,v=t.vx||0,W=vp.clientWidth;
+  if(Math.abs(dx)>Math.min(140,W*.22)||(Math.abs(v)>.5&&Math.abs(dx)>30&&Math.sign(v)===Math.sign(dx)))turnPage(dx<0?1:-1);
+  else settleSheet();
 }
 function startFling(vx,vy){
   stopFling();if(Math.hypot(vx,vy)<.25)return;
@@ -683,7 +709,7 @@ vp.addEventListener('pointerdown',e=>{
   stopFling();
   if(e.pointerType==='touch'){
     if(penDown)return;
-    touches.set(e.pointerId,{x:e.clientX,y:e.clientY,t:e.timeStamp,vx:0,vy:0});try{vp.setPointerCapture(e.pointerId)}catch(_){}
+    touches.set(e.pointerId,{x:e.clientX,y:e.clientY,sx:e.clientX,sy:e.clientY,t:e.timeStamp,vx:0,vy:0});try{vp.setPointerCapture(e.pointerId)}catch(_){}
     if(drawing&&drawing.touch){if(touches.size>=2){const keep=performance.now()-drawing.t0>350&&drawing.st&&drawing.st.p.length>30;endDraw(!keep)}return}
     if(touches.size===1&&!S.penOnly&&S.tool!=='hand'){touches.delete(e.pointerId);return startDraw(e)}
     return;
@@ -701,11 +727,19 @@ const up=e=>{
   if(drawing&&drawing.id===e.pointerId)endDraw(e.type==='pointercancel'&&!!drawing.st);
   if(touches.has(e.pointerId)){const t=touches.get(e.pointerId);touches.delete(e.pointerId);
     if(pinch&&touches.size<2)pinchEnd();
-    else if(!touches.size&&e.type==='pointerup'&&e.timeStamp-(t.t||0)<60)startFling(t.vx||0,t.vy||0);}
+    else if(t.axis==='swipe'){if(e.type==='pointerup')swipeEnd(t);else settleSheet()}
+    else if(!touches.size&&e.type==='pointerup'&&e.timeStamp-(t.t||0)<60)startFling(t.vx||0,t.vy||0);
+    for(const o of touches.values()){o.sx=o.x;o.sy=o.y;o.axis='pan'}}
   if(gesture&&gesture.id===e.pointerId)gesture=null;
 };
 vp.addEventListener('pointerup',up);vp.addEventListener('pointercancel',up);
-vp.addEventListener('wheel',e=>{if(e.ctrlKey||e.metaKey){e.preventDefault();setZoom(S.zoom*Math.exp(-e.deltaY*.01),e.clientX,e.clientY)}},{passive:false});
+let wheelX=0,wheelT=0,wheelLock=0;
+vp.addEventListener('wheel',e=>{
+  if(e.ctrlKey||e.metaKey){e.preventDefault();setZoom(S.zoom*Math.exp(-e.deltaY*.01),e.clientX,e.clientY);return}
+  if(Math.abs(e.deltaX)>Math.abs(e.deltaY)&&noHScroll()){e.preventDefault();const now=performance.now();
+    if(now<wheelLock)return;if(now-wheelT>250)wheelX=0;wheelT=now;wheelX+=e.deltaX;
+    if(Math.abs(wheelX)>120){turnPage(wheelX>0?1:-1);wheelX=0;wheelLock=now+600}}
+},{passive:false});
 ['gesturestart','gesturechange','contextmenu'].forEach(t=>vp.addEventListener(t,e=>e.preventDefault()));
 
 /* ---------- wiring ---------- */
