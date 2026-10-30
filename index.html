@@ -632,6 +632,7 @@ let pinch=null,fling=0;
 function stopFling(){if(fling){cancelAnimationFrame(fling);fling=0}}
 function pinchPoints(){const [a,b]=[...touches.values()];return{d:Math.hypot(a.x-b.x,a.y-b.y)||1,m:[(a.x+b.x)/2,(a.y+b.y)/2]}}
 function pinchStart(){
+  sheet.style.transition='none';
   const {d,m}=pinchPoints(),r=sheet.getBoundingClientRect();
   pinch={d0:d,m0:m,m,s:1};
   sheet.style.transformOrigin=(m[0]-r.left)+'px '+(m[1]-r.top)+'px';sheet.style.willChange='transform';
@@ -643,10 +644,18 @@ function pinchMove(){
 }
 function pinchEnd(){
   const p=pinch;pinch=null;if(!p)return;
+  const before=sheet.getBoundingClientRect();
   sheet.style.transform='';sheet.style.willChange='';sheet.style.transformOrigin='';
   if(Math.abs(p.s-1)>.005)setZoom(S.zoom*p.s,p.m0[0],p.m0[1]);
   vp.scrollLeft-=p.m[0]-p.m0[0];vp.scrollTop-=p.m[1]-p.m0[1];
   for(const t of touches.values()){t.vx=0;t.vy=0}
+  // If the page can't sit exactly where the fingers left it (e.g. past its edge), glide it into place.
+  const after=sheet.getBoundingClientRect(),dx=before.left-after.left,dy=before.top-after.top;
+  if(Math.abs(dx)>1||Math.abs(dy)>1){
+    sheet.style.transition='none';sheet.style.transform='translate('+dx+'px,'+dy+'px)';
+    requestAnimationFrame(()=>requestAnimationFrame(()=>{sheet.style.transition='transform .22s cubic-bezier(.2,.8,.2,1)';sheet.style.transform='';
+      setTimeout(()=>{if(!pinch)sheet.style.transition=''},260)}));
+  }
 }
 function touchPan(e){
   const t=touches.get(e.pointerId);if(!t)return;
