@@ -95,13 +95,15 @@ svg{display:block}
 .chip{flex:none;padding:7px 12px;border-radius:999px;border:1px solid var(--line);font-size:.82rem;font-weight:700;white-space:nowrap}
 .chip.lock{display:inline-flex;align-items:center;gap:6px}
 .ed-wrap.locked .pager button:not(.count){display:none}
-.ed-wrap.locked .pager .count{pointer-events:none;padding-inline:14px}
+.ed-wrap.locked .pager .count{padding-inline:14px}
 .chip[aria-pressed="true"]{background:var(--accent);color:var(--accent-ink);border-color:transparent}
 .vp{flex:1;min-height:0;overflow:auto;position:relative;touch-action:none;-webkit-user-select:none;user-select:none;-webkit-touch-callout:none;padding:16px}
 .sheet{position:relative;margin:0 auto;background:var(--paper);box-shadow:var(--shadow);border-radius:2px}
 .sheet canvas{position:absolute;inset:0;width:100%;height:100%}
 .loading{position:absolute;inset:0;display:grid;place-items:center;color:#5d6979;font-size:.95rem}
 .pager{position:absolute;left:50%;transform:translateX(-50%);bottom:calc(14px + env(safe-area-inset-bottom,0px));display:flex;align-items:center;gap:2px;background:var(--surface);border:1px solid var(--line);border-radius:999px;padding:4px;box-shadow:var(--shadow);z-index:3}
+.pager .count::after{content:attr(data-label)}
+.pager,.zoom{-webkit-user-select:none;user-select:none;-webkit-touch-callout:none;touch-action:none}
 .pager .count{padding:8px 6px;border-radius:8px;min-width:64px;text-align:center;font-variant-numeric:tabular-nums;font-size:.9rem;font-weight:700}
 .zoom{position:absolute;right:calc(14px + env(safe-area-inset-right,0px));bottom:calc(14px + env(safe-area-inset-bottom,0px));display:flex;flex-direction:column;background:var(--surface);border:1px solid var(--line);border-radius:12px;box-shadow:var(--shadow);z-index:3}
 .ed-wrap{flex:1;min-height:0;position:relative;display:flex;flex-direction:column}
@@ -229,7 +231,7 @@ svg{display:block}
       </div>
       <nav class="pager" aria-label="Pages">
         <button id="prev" class="icon-btn" type="button" aria-label="Previous page"><svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.3" stroke-linecap="round" stroke-linejoin="round"><path d="M15 5l-7 7 7 7"/></svg></button>
-        <button id="count" class="count" type="button" aria-label="Go to page">1 / 1</button>
+        <button id="count" class="count" type="button" aria-label="Go to page" data-label="1 / 1"></button>
         <button id="next" class="icon-btn" type="button" aria-label="Next page"><svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.3" stroke-linecap="round" stroke-linejoin="round"><path d="M9 5l7 7-7 7"/></svg></button>
         <button id="addPage" class="icon-btn" type="button" aria-label="Add a page after this one"><svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.3" stroke-linecap="round"><path d="M12 5v14M5 12h14"/></svg></button>
       </nav>
@@ -249,6 +251,7 @@ svg{display:block}
         <button id="mExport" type="button">Save page as image</button>
         <button id="mRename" type="button">Rename notebook</button>
         <button id="mDelPage" class="danger" type="button">Delete this page</button>
+        <div class="lbl" style="text-transform:none;letter-spacing:0">Inkwell version 15</div>
       </div>
     </div>
   </section>
@@ -275,7 +278,13 @@ const auth=getAuth(fbApp);
 const fdb=initializeFirestore(fbApp,{localCache:persistentLocalCache({tabManager:persistentMultipleTabManager(),cacheSizeBytes:400*1024*1024})});
 function colRef(path){return{path,doc:id=>docRef(path+'/'+id),get:()=>getDocs(collection(fdb,path)),onSnapshot:(n,e)=>onSnapshot(collection(fdb,path),n,e)}}
 function docRef(path){return{path,collection:c=>colRef(path+'/'+c),set:b=>setDoc(doc(fdb,path),b),get:()=>getDoc(doc(fdb,path)),delete:()=>deleteDoc(doc(fdb,path))}}
-if('serviceWorker' in navigator&&!window.Capacitor)addEventListener('load',()=>navigator.serviceWorker.register('sw.js').catch(()=>{}));
+if('serviceWorker' in navigator&&!window.Capacitor){
+  addEventListener('load',()=>navigator.serviceWorker.register('sw.js').catch(()=>{}));
+  document.addEventListener('visibilitychange',()=>{if(!document.hidden)navigator.serviceWorker.getRegistration().then(r=>r&&r.update()).catch(()=>{})});
+  let hadController=!!navigator.serviceWorker.controller;
+  navigator.serviceWorker.addEventListener('controllerchange',()=>{if(!hadController){hadController=true;return}
+    const reload=()=>{if(document.querySelector('#editor').hidden)location.reload();else setTimeout(reload,3000)};reload()});
+}
 (function(){
 "use strict";
 const $=s=>document.querySelector(s);
@@ -510,7 +519,7 @@ function refreshEditorChrome(){
   const nb=curNb();if(!nb){return}
   if(S.pageIdx>=nb.pages.length)S.pageIdx=nb.pages.length-1;
   $('#nbTitle').textContent=nb.title||'Untitled';
-  $('#count').textContent=(S.pageIdx+1)+' / '+nb.pages.length;
+  $('#count').dataset.label=(S.pageIdx+1)+' / '+nb.pages.length;$('#count').setAttribute('aria-label','Page '+(S.pageIdx+1)+' of '+nb.pages.length+'. Go to page');
   $('#prev').disabled=S.pageIdx===0;$('#next').disabled=S.pageIdx>=nb.pages.length-1;
   const pid=curPage().id;$('#undo').disabled=!(S.undo.get(pid)||[]).length;$('#redo').disabled=!(S.redo.get(pid)||[]).length;
   if(!$('#drawer').hidden)renderThumbs();
@@ -685,14 +694,22 @@ let lastPen=0,ctlDown=null;
 addEventListener('pointerdown',e=>{if(e.pointerType==='pen')lastPen=performance.now()},true);
 addEventListener('pointermove',e=>{if(e.pointerType==='pen')lastPen=performance.now()},true);
 addEventListener('pointerup',e=>{if(e.pointerType==='pen')lastPen=performance.now()},true);
+let synthClick=false;
 for(const box of document.querySelectorAll('.pager,.zoom')){
-  box.addEventListener('pointerdown',e=>{ctlDown={type:e.pointerType,t:performance.now(),x:e.clientX,y:e.clientY,big:Math.max(e.width||0,e.height||0)>32,pen:penDown||performance.now()-lastPen<1500}},true);
-  box.addEventListener('pointerup',e=>{if(ctlDown&&e.pointerType==='touch'&&(Math.hypot(e.clientX-ctlDown.x,e.clientY-ctlDown.y)>12||performance.now()-ctlDown.t>450))ctlDown.reject=true},true);
+  // Stops iPadOS long-press text selection, the magnifier and the Copy/Look Up bar on these controls.
+  box.addEventListener('touchstart',e=>{if(e.cancelable)e.preventDefault()},{passive:false});
+  box.addEventListener('pointerdown',e=>{ctlDown={type:e.pointerType,t:performance.now(),x:e.clientX,y:e.clientY,big:Math.max(e.width||0,e.height||0)>32,pen:penDown||performance.now()-lastPen<1500,btn:e.target.closest('button')}},true);
+  box.addEventListener('pointerup',e=>{
+    const d=ctlDown;if(!d||e.pointerType!=='touch')return;ctlDown=null;
+    const ok=!d.big&&!d.pen&&!penDown&&performance.now()-lastPen>=1500&&Math.hypot(e.clientX-d.x,e.clientY-d.y)<=12&&performance.now()-d.t<=450;
+    if(ok&&d.btn&&!(S.locked&&box.classList.contains('pager'))){synthClick=true;try{d.btn.click()}finally{synthClick=false}}
+  },true);
   box.addEventListener('click',e=>{
-    const d=ctlDown;ctlDown=null;
+    if(synthClick)return;
     if(S.locked&&box.classList.contains('pager')){e.preventDefault();e.stopImmediatePropagation();return}
-    if(!d||d.type!=='touch')return;
-    if(d.reject||d.big||d.pen||penDown||performance.now()-lastPen<1500){e.preventDefault();e.stopImmediatePropagation()}
+    // Touch taps are handled on pointerup above; any click the browser still sends for a touch is dropped.
+    if(e.pointerType==='touch'||(ctlDown&&ctlDown.type==='touch')){e.preventDefault();e.stopImmediatePropagation();return}
+    ctlDown=null;
   },true);
 }
 
