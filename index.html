@@ -670,6 +670,23 @@ function touchPan(e){
   const dx=nx-t.x,dy=ny-t.y;vp.scrollLeft-=dx;vp.scrollTop-=dy;
   t.vx=(t.vx||0)*.6+dx/dt*.4;t.vy=(t.vy||0)*.6+dy/dt*.4;t.x=nx;t.y=ny;t.t=e.timeStamp;
 }
+/* Palm rejection for the floating controls (page counter, arrows, add page, zoom).
+   A touch there is ignored if the Pencil is down or was used in the last 1.5 s, if the touch is
+   large (a palm), held for a long time, or slid. A quick, deliberate finger tap still works. */
+let lastPen=0,ctlDown=null;
+addEventListener('pointerdown',e=>{if(e.pointerType==='pen')lastPen=performance.now()},true);
+addEventListener('pointermove',e=>{if(e.pointerType==='pen')lastPen=performance.now()},true);
+addEventListener('pointerup',e=>{if(e.pointerType==='pen')lastPen=performance.now()},true);
+for(const box of document.querySelectorAll('.pager,.zoom')){
+  box.addEventListener('pointerdown',e=>{ctlDown={type:e.pointerType,t:performance.now(),x:e.clientX,y:e.clientY,big:Math.max(e.width||0,e.height||0)>32,pen:penDown||performance.now()-lastPen<1500}},true);
+  box.addEventListener('pointerup',e=>{if(ctlDown&&e.pointerType==='touch'&&(Math.hypot(e.clientX-ctlDown.x,e.clientY-ctlDown.y)>12||performance.now()-ctlDown.t>450))ctlDown.reject=true},true);
+  box.addEventListener('click',e=>{
+    const d=ctlDown;ctlDown=null;
+    if(!d||d.type!=='touch')return;
+    if(d.reject||d.big||d.pen||penDown||performance.now()-lastPen<1500){e.preventDefault();e.stopImmediatePropagation()}
+  },true);
+}
+
 /* Page turning by swipe */
 const noHScroll=()=>vp.scrollWidth<=vp.clientWidth+2;
 function settleSheet(){requestAnimationFrame(()=>requestAnimationFrame(()=>{sheet.style.transition='transform .24s cubic-bezier(.2,.8,.2,1)';sheet.style.transform='';setTimeout(()=>{if(!pinch)sheet.style.transition=''},280)}))}
