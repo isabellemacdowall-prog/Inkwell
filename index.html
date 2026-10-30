@@ -287,7 +287,7 @@ if(!SIZES[S.tool]&&S.tool!=='hand')S.tool='p';
 /* ---------- toast & modal ---------- */
 let toastT;
 function toast(msg){const t=$('#toast');t.textContent=msg;t.hidden=false;clearTimeout(toastT);toastT=setTimeout(()=>t.hidden=true,3200)}
-function modal(build){return new Promise(res=>{const m=$('#modal'),c=$('#card');c.replaceChildren();const close=v=>{m.hidden=true;res(v)};build(c,close);m.hidden=false;m.onclick=e=>{if(e.target===m)close(null)};const f=c.querySelector('input');if(f)setTimeout(()=>f.focus(),30)})}
+function modal(build){return new Promise(res=>{const m=$('#modal'),c=$('#card');c.replaceChildren();const close=v=>{m.hidden=true;res(v)};build(c,close);m.hidden=false;m.onclick=e=>{if(e.target===m)close(null)};const f=c.querySelector('input');if(f){f.focus();f.select();setTimeout(()=>{if(document.activeElement!==f){f.focus();f.select()}},30)}})}
 function confirmBox(title,text,ok){return modal((c,close)=>{c.append(el('h2',null,title),el('p',null,text),el('div',{class:'actions'},el('button',{class:'btn',type:'button',onclick:()=>close(false)},'Cancel'),el('button',{class:'btn danger',type:'button',onclick:()=>close(true)},ok)))})}
 function nameBox(title,value,ok){return modal((c,close)=>{const inp=el('input',{type:'text',id:'nameInput',maxlength:'60'});inp.value=value||'';const f=el('form',{style:'display:contents',onsubmit:e=>{e.preventDefault();close(inp.value.trim()||null)}});f.append(el('h2',null,title),inp,el('div',{class:'actions'},el('button',{class:'btn',type:'button',onclick:()=>close(null)},'Cancel'),el('button',{class:'btn primary',type:'submit'},ok)));c.append(f)})}
 function newNotebookBox(){return modal((c,close)=>{
