@@ -216,6 +216,7 @@ svg{display:block}
         <div id="sheet" class="sheet">
           <canvas id="base"></canvas>
           <canvas id="live"></canvas>
+          <canvas id="pred"></canvas>
           <div id="loading" class="loading">Opening notebook…</div>
         </div>
       </div>
@@ -264,7 +265,7 @@ const firebaseConfig={
 };
 const fbApp=initializeApp(firebaseConfig);
 const auth=getAuth(fbApp);
-const fdb=initializeFirestore(fbApp,{localCache:persistentLocalCache({tabManager:persistentMultipleTabManager()})});
+const fdb=initializeFirestore(fbApp,{localCache:persistentLocalCache({tabManager:persistentMultipleTabManager(),cacheSizeBytes:400*1024*1024})});
 function colRef(path){return{path,doc:id=>docRef(path+'/'+id),get:()=>getDocs(collection(fdb,path)),onSnapshot:(n,e)=>onSnapshot(collection(fdb,path),n,e)}}
 function docRef(path){return{path,collection:c=>colRef(path+'/'+c),set:b=>setDoc(doc(fdb,path),b),get:()=>getDoc(doc(fdb,path)),delete:()=>deleteDoc(doc(fdb,path))}}
 if('serviceWorker' in navigator&&!window.Capacitor)addEventListener('load',()=>navigator.serviceWorker.register('sw.js').catch(()=>{}));
@@ -390,12 +391,13 @@ function assignChunk(pid,len){let best=null;for(const [k,c] of S.chunks)if(c.pag
   if(best&&best.c.bytes+len<CHUNK_MAX)return best.k;const n=best?best.c.n+1:0;const k=pid+'_'+n;S.chunks.set(k,{page:pid,n,bytes:0});return k}
 function addStroke(pid,st){if(pageArr(pid).some(x=>x.i===st.i))return;if(!st.k||!S.chunks.has(st.k))st.k=assignChunk(pid,sLen(st));const a=pageArr(pid);a.push(st);if(a.length>1&&a[a.length-2].s>st.s)a.sort((x,y)=>x.s-y.s);S.chunks.get(st.k).bytes+=sLen(st);markDirty(st.k)}
 function removeStroke(pid,st){const a=pageArr(pid);const i=a.findIndex(x=>x.i===st.i);if(i>=0)st=a[i];if(i<0)return;a.splice(i,1);const c=S.chunks.get(st.k);if(c)c.bytes-=sLen(st);markDirty(st.k)}
-function applyChunk(k,data){removeChunkLocal(k);const a=pageArr(data.page);let bytes=0;for(const st of (data.strokes||[])){const o={i:st.i,t:st.t,c:st.c,w:st.w,s:st.s,p:st.p,k};a.push(o);bytes+=sLen(o)}a.sort((x,y)=>x.s-y.s);S.chunks.set(k,{page:data.page,n:data.n||0,bytes})}
+function applyChunk(k,data){removeChunkLocal(k);const a=pageArr(data.page);let bytes=0;for(const st of (data.strokes||[])){const o={i:st.i,t:st.t,c:st.c,w:st.w,s:st.s,p:st.p,k};if(st.v)o.v=st.v;a.push(o);bytes+=sLen(o)}a.sort((x,y)=>x.s-y.s);S.chunks.set(k,{page:data.page,n:data.n||0,bytes})}
 function removeChunkLocal(k){const c=S.chunks.get(k);if(!c)return;const a=pageArr(c.page);for(let i=a.length-1;i>=0;i--)if(a[i].k===k)a.splice(i,1);S.chunks.delete(k)}
 
 /* ---------- rendering ---------- */
 const base=$('#base'),live=$('#live'),sheet=$('#sheet'),vp=$('#vp');
-const bctx=base.getContext('2d'),lctx=live.getContext('2d');
+const pred=$('#pred');
+const bctx=base.getContext('2d'),lctx=live.getContext('2d',{desynchronized:true})||live.getContext('2d'),pctx=pred.getContext('2d');
 function drawTemplate(ctx,tpl,paper,pid){
   ctx.fillStyle=tpl==='pdf'?'#ffffff':(paper||'#fdfdfb');ctx.fillRect(0,0,PW,PH);
   if(tpl==='pdf'){const b=bgFor(pid);if(b&&b.img){const r=Math.min(PW/b.img.naturalWidth,PH/b.img.naturalHeight);const w=b.img.naturalWidth*r,h=b.img.naturalHeight*r;ctx.drawImage(b.img,(PW-w)/2,(PH-h)/2,w,h)}else{ctx.fillStyle='#8a94a3';ctx.font='28px system-ui,sans-serif';ctx.textAlign='center';ctx.fillText(b&&b.failed?'This PDF page couldn’t be loaded':'Loading page…',PW/2,PH/2);ctx.textAlign='start'}return}
@@ -403,21 +405,44 @@ function drawTemplate(ctx,tpl,paper,pid){
   else if(tpl==='grid'){ctx.strokeStyle='#dfe5ee';ctx.lineWidth=1;ctx.beginPath();for(let x=20;x<PW;x+=32){ctx.moveTo(x,0);ctx.lineTo(x,PH)}for(let y=27;y<PH;y+=32){ctx.moveTo(0,y);ctx.lineTo(PW,y)}ctx.stroke()}
   else if(tpl==='dots'){ctx.fillStyle='#b4bdca';for(let y=27;y<PH;y+=32)for(let x=20;x<PW;x+=32){ctx.beginPath();ctx.arc(x,y,1.7,0,6.283);ctx.fill()}}
 }
-function drawStroke(ctx,st){
-  const p=st.p,n=p.length/3;if(!n)return;
-  ctx.save();ctx.lineCap='round';ctx.lineJoin='round';ctx.strokeStyle=st.c;ctx.fillStyle=st.c;
-  if(st.t==='h'){
-    ctx.globalAlpha=.42;ctx.globalCompositeOperation='multiply';ctx.lineWidth=st.w;ctx.beginPath();ctx.moveTo(p[0]/2,p[1]/2);
-    if(n===1)ctx.lineTo(p[0]/2+.1,p[1]/2);for(let j=1;j<n;j++)ctx.lineTo(p[j*3]/2,p[j*3+1]/2);ctx.stroke();
-  }else{
-    const W=pr=>st.w*(.35+pr*1.3);
-    if(n===1){ctx.beginPath();ctx.arc(p[0]/2,p[1]/2,W(p[2]/9)/2,0,6.283);ctx.fill()}
-    else{let px=p[0]/2,py=p[1]/2,mx=px,my=py,pp=p[2]/9;
-      for(let j=1;j<n;j++){const x=p[j*3]/2,y=p[j*3+1]/2,pr=p[j*3+2]/9;const nx=(px+x)/2,ny=(py+y)/2;ctx.beginPath();ctx.moveTo(mx,my);ctx.quadraticCurveTo(px,py,nx,ny);ctx.lineWidth=W((pp+pr)/2);ctx.stroke();mx=nx;my=ny;px=x;py=y;pp=pr}
-      ctx.beginPath();ctx.moveTo(mx,my);ctx.lineTo(px,py);ctx.lineWidth=W(pp);ctx.stroke()}
+/* Stroke points are flat [x,y,pressure,...]. v2 strokes store x,y in 1/8 page units and pressure 0-100;
+   older strokes use 1/2 units and pressure 0-9. */
+const UNITS=st=>st.v===2?8:2, LEVELS=st=>st.v===2?100:9;
+function penWidth(st,pr){return st.v===2?st.w*(.24+1.5*Math.pow(pr,.8)):st.w*(.35+pr*1.3)}
+// Pen segments j0..j1-1. Segment j curves from the midpoint before point j-1, through it, to the midpoint of j-1 and j.
+// Its shape never changes once point j exists, so the live layer can draw each segment exactly once.
+function drawPenRange(ctx,st,j0,j1){
+  const p=st.p,U=UNITS(st),Q=LEVELS(st);
+  for(let j=Math.max(1,j0);j<j1;j++){
+    const px=p[j*3-3]/U,py=p[j*3-2]/U,pp=p[j*3-1]/Q,x=p[j*3]/U,y=p[j*3+1]/U,pr=p[j*3+2]/Q;
+    let mx=px,my=py;if(j>1){mx=(p[j*3-6]/U+px)/2;my=(p[j*3-5]/U+py)/2}
+    ctx.beginPath();ctx.moveTo(mx,my);ctx.quadraticCurveTo(px,py,(px+x)/2,(py+y)/2);ctx.lineWidth=penWidth(st,(pp+pr)/2);ctx.stroke();
   }
+}
+// The last half-segment (and any predicted points) — redrawn every frame while writing.
+function drawPenTail(ctx,st,extra){
+  const p=st.p,U=UNITS(st),Q=LEVELS(st),n=p.length/3;if(!n)return;
+  const lx=p[n*3-3]/U,ly=p[n*3-2]/U,lw=penWidth(st,p[n*3-1]/Q);
+  if(n===1&&!(extra&&extra.length)){ctx.beginPath();ctx.arc(lx,ly,lw/2,0,6.283);ctx.fill();return}
+  ctx.beginPath();
+  if(n>1)ctx.moveTo((p[n*3-6]/U+lx)/2,(p[n*3-5]/U+ly)/2);else ctx.moveTo(lx,ly);
+  ctx.lineTo(lx,ly);if(extra)for(const q of extra)ctx.lineTo(q[0],q[1]);
+  ctx.lineWidth=lw;ctx.stroke();
+}
+function inkStyle(ctx,st){ctx.lineCap='round';ctx.lineJoin='round';ctx.strokeStyle=st.c;ctx.fillStyle=st.c}
+function drawHighlighter(ctx,st,extra){
+  const p=st.p,U=UNITS(st),n=p.length/3;if(!n)return;
+  ctx.globalAlpha=.42;ctx.globalCompositeOperation='multiply';ctx.lineWidth=st.w;ctx.beginPath();ctx.moveTo(p[0]/U,p[1]/U);
+  if(n===1&&!(extra&&extra.length))ctx.lineTo(p[0]/U+.1,p[1]/U);
+  for(let j=1;j<n;j++)ctx.lineTo(p[j*3]/U,p[j*3+1]/U);if(extra)for(const q of extra)ctx.lineTo(q[0],q[1]);ctx.stroke();
+}
+function drawStroke(ctx,st){
+  const n=st.p.length/3;if(!n)return;
+  ctx.save();inkStyle(ctx,st);
+  if(st.t==='h')drawHighlighter(ctx,st);else{drawPenRange(ctx,st,1,n);drawPenTail(ctx,st)}
   ctx.restore();
 }
+
 function curNb(){return S.notebooks.get(S.nbId)}
 function curPage(){const nb=curNb();return nb&&nb.pages[S.pageIdx]}
 /* PDF page backgrounds: one JPEG per page, stored at notebooks/{nb}/bgs/{pageId} */
@@ -437,16 +462,27 @@ function sizeCanvases(){
   const W=sheet.clientWidth,H=sheet.clientHeight;if(!W)return;
   let dpr=Math.min(window.devicePixelRatio||1,3);const maxArea=11e6;if(W*H*dpr*dpr>maxArea)dpr=Math.sqrt(maxArea/(W*H));
   const cw=Math.round(W*dpr),ch=Math.round(H*dpr);
-  if(base.width!==cw||base.height!==ch){base.width=live.width=cw;base.height=live.height=ch}
+  if(base.width!==cw||base.height!==ch){base.width=live.width=pred.width=cw;base.height=live.height=pred.height=ch}
   pxScale=cw/PW;
 }
 let baseRaf=0;
-function renderBase(){baseRaf=0;const pg=curPage();if(!pg)return;sizeCanvases();renderPageTo(bctx,pxScale,pg);lctx.setTransform(1,0,0,1,0,0);lctx.clearRect(0,0,live.width,live.height)}
+function renderBase(){baseRaf=0;const pg=curPage();if(!pg)return;sizeCanvases();renderPageTo(bctx,pxScale,pg);clearLayer(lctx);clearLayer(pctx);if(drawing&&drawing.st)drawing.drawn=0}
 function scheduleBase(){if(!baseRaf)baseRaf=requestAnimationFrame(renderBase)}
 let liveRaf=0,cursor=null;
-function renderLive(){liveRaf=0;lctx.setTransform(1,0,0,1,0,0);lctx.clearRect(0,0,live.width,live.height);lctx.setTransform(pxScale,0,0,pxScale,0,0);
-  if(drawing&&drawing.st)drawStroke(lctx,drawing.st);
-  if(cursor){lctx.strokeStyle='rgba(40,50,70,.55)';lctx.lineWidth=1.5/pxScale*2;lctx.beginPath();lctx.arc(cursor[0],cursor[1],cursor[2],0,6.283);lctx.stroke()}}
+function clearLayer(ctx){ctx.setTransform(1,0,0,1,0,0);ctx.clearRect(0,0,ctx.canvas.width,ctx.canvas.height)}
+function renderLive(){
+  liveRaf=0;clearLayer(pctx);
+  const d=drawing;
+  if(d&&d.st){
+    const st=d.st,n=st.p.length/3;
+    if(st.t==='h'){clearLayer(lctx);lctx.setTransform(pxScale,0,0,pxScale,0,0);lctx.save();inkStyle(lctx,st);drawHighlighter(lctx,st,d.pred);lctx.restore()}
+    else{
+      lctx.setTransform(pxScale,0,0,pxScale,0,0);lctx.save();inkStyle(lctx,st);drawPenRange(lctx,st,(d.drawn||1),n);lctx.restore();d.drawn=n;
+      pctx.setTransform(pxScale,0,0,pxScale,0,0);pctx.save();inkStyle(pctx,st);drawPenTail(pctx,st,d.pred);pctx.restore();
+    }
+  }
+  if(cursor){pctx.setTransform(pxScale,0,0,pxScale,0,0);pctx.strokeStyle='rgba(40,50,70,.55)';pctx.lineWidth=3/pxScale;pctx.beginPath();pctx.arc(cursor[0],cursor[1],cursor[2],0,6.283);pctx.stroke()}
+}
 function scheduleLive(){if(!liveRaf)liveRaf=requestAnimationFrame(renderLive)}
 
 function layoutSheet(){const fit=Math.min(vp.clientWidth-32,860);const W=Math.max(120,fit*S.zoom);sheet.style.width=W+'px';sheet.style.height=(W*PH/PW)+'px'}
@@ -531,26 +567,41 @@ async function closeNotebook(){
 /* ---------- input ---------- */
 let drawing=null;const touches=new Map();let gesture=null,penDown=false;
 function toPage(e,r){return[(e.clientX-r.left)/r.width*PW,(e.clientY-r.top)/r.height*PH]}
-function pushPoint(st,x,y,pr){const p=st.p,L=p.length;const X=Math.round(x*2),Y=Math.round(y*2);if(L&&Math.abs(p[L-3]-X)<2&&Math.abs(p[L-2]-Y)<2)return;p.push(X,Y,Math.max(0,Math.min(9,Math.round(pr*9))))}
-function pressureOf(e,prev){if(e.pointerType!=='pen'||!e.pressure)return .5;const v=Math.min(1,e.pressure*1.1);return prev==null?v:prev*.55+v*.45}
+function pushPoint(st,x,y,pr){const p=st.p,L=p.length;const X=Math.round(x*8),Y=Math.round(y*8),P=Math.max(0,Math.min(100,Math.round(pr*100)));
+  if(L&&Math.abs(p[L-3]-X)<3&&Math.abs(p[L-2]-Y)<3){if(P>p[L-1])p[L-1]=P;return}p.push(X,Y,P)}
+// Stylus: real pressure, lightly smoothed so the line doesn't wobble. Finger/mouse: no pressure, so faster
+// movement draws a slightly thinner line, like a real pen.
+function pressureOf(e,d,x,y){
+  if(e.pointerType==='pen'&&e.pressure>0){
+    const v=Math.min(1,e.pressure);
+    return d.pr==null?v*.85:d.pr+(v-d.pr)*.38;
+  }
+  if(e.pointerType==='pen')return d.pr==null?.3:d.pr;
+  if(d.lx==null){d.lx=x;d.ly=y;d.lt=e.timeStamp;return .5}
+  const dt=Math.max(1,e.timeStamp-d.lt),sp=Math.hypot(x-d.lx,y-d.ly)/dt;d.lx=x;d.ly=y;d.lt=e.timeStamp;
+  const target=Math.max(.28,Math.min(.6,.6-sp*.11));
+  return d.pr+(target-d.pr)*.18;
+}
 function startDraw(e){
   if(S.readOnly){toast('This view can read notebooks but can’t save changes.');return}
   const pg=curPage();if(!pg)return;
   const r=sheet.getBoundingClientRect();const [x,y]=toPage(e,r);
   drawing={id:e.pointerId,touch:e.pointerType==='touch',r,pid:pg.id,t0:performance.now(),pr:null};
   if(S.tool==='e'){drawing.erased=[];eraseAt(x,y)}
-  else{const st={i:newId(),t:S.tool,c:S.tool==='p'?S.ink:S.high,w:SIZES[S.tool][S.size[S.tool]],s:Date.now(),p:[]};drawing.pr=pressureOf(e);pushPoint(st,x,y,drawing.pr);drawing.st=st}
+  else{const st={i:newId(),v:2,t:S.tool,c:S.tool==='p'?S.ink:S.high,w:SIZES[S.tool][S.size[S.tool]],s:Date.now(),p:[]};drawing.pr=pressureOf(e,drawing,x,y);pushPoint(st,x,y,drawing.pr);drawing.st=st;drawing.drawn=1}
   try{vp.setPointerCapture(e.pointerId)}catch(_){}
   scheduleLive();
 }
 function moveDraw(e){
   const evs=(e.getCoalescedEvents&&e.getCoalescedEvents())||[e];
   for(const ev of (evs.length?evs:[e])){const [x,y]=toPage(ev,drawing.r);
-    if(drawing.st){drawing.pr=pressureOf(ev,drawing.pr);pushPoint(drawing.st,x,y,drawing.pr)}else eraseAt(x,y)}
+    if(drawing.st){drawing.pr=pressureOf(ev,drawing,x,y);pushPoint(drawing.st,x,y,drawing.pr)}else eraseAt(x,y)}
+  if(drawing.st){const pe=e.getPredictedEvents?e.getPredictedEvents():[];drawing.pred=pe.length?pe.slice(0,3).map(ev=>toPage(ev,drawing.r)):null}
   scheduleLive();
 }
 function endDraw(cancel){
   const d=drawing;drawing=null;cursor=null;if(!d)return;
+  clearLayer(lctx);clearLayer(pctx);
   if(d.st&&!cancel&&d.st.p.length){addStroke(d.pid,d.st);record(d.pid,{a:'add',strokes:[d.st]});bctx.setTransform(pxScale,0,0,pxScale,0,0);drawStroke(bctx,d.st)}
   if(d.erased&&d.erased.length)record(d.pid,{a:'erase',strokes:d.erased});
   scheduleLive();refreshEditorChrome();
@@ -558,8 +609,8 @@ function endDraw(cancel){
 function segDist(px,py,ax,ay,bx,by){const dx=bx-ax,dy=by-ay;const l=dx*dx+dy*dy;let t=l?((px-ax)*dx+(py-ay)*dy)/l:0;t=Math.max(0,Math.min(1,t));const ex=ax+t*dx-px,ey=ay+t*dy-py;return Math.sqrt(ex*ex+ey*ey)}
 function eraseAt(x,y){
   const r=SIZES.e[S.size.e];cursor=[x,y,r];const a=S.strokes.get(drawing.pid)||[];let hit=false;
-  for(let i=a.length-1;i>=0;i--){const st=a[i],p=st.p,n=p.length/3,lim=r+st.w/2;let h=false;
-    for(let j=0;j<n&&!h;j++){const ax=p[j*3]/2,ay=p[j*3+1]/2;if(n===1||j===n-1){if(Math.hypot(ax-x,ay-y)<lim)h=true}else if(segDist(x,y,ax,ay,p[j*3+3]/2,p[j*3+4]/2)<lim)h=true}
+  for(let i=a.length-1;i>=0;i--){const st=a[i],p=st.p,n=p.length/3,U=UNITS(st),lim=r+st.w/2;let h=false;
+    for(let j=0;j<n&&!h;j++){const ax=p[j*3]/U,ay=p[j*3+1]/U;if(n===1||j===n-1){if(Math.hypot(ax-x,ay-y)<lim)h=true}else if(segDist(x,y,ax,ay,p[j*3+3]/U,p[j*3+4]/U)<lim)h=true}
     if(h){removeStroke(drawing.pid,st);drawing.erased.push(st);hit=true}}
   if(hit)scheduleBase();
 }
@@ -670,14 +721,14 @@ $('#mPdf').onclick=async()=>{
     progress('Preparing PDF','',0);
     await loadScript(JSPDF);
     const pdf=new window.jspdf.jsPDF({unit:'pt',format:'a4',compress:true});
-    const c=document.createElement('canvas');c.width=1100;c.height=1556;const ctx=c.getContext('2d');const lock=await wakeLock();
+    const c=document.createElement('canvas');c.width=1400;c.height=1980;const ctx=c.getContext('2d');const lock=await wakeLock();
     try{for(let i=0;i<nb.pages.length;i++){
       if(S.nbId!==id)return;
       const pg=nb.pages[i];
       if(pg.tpl==='pdf'){const b=bgFor(pg.id);if(!b.img)await b.ready}
-      renderPageTo(ctx,1100/PW,pg);
+      renderPageTo(ctx,1400/PW,pg);
       if(i)pdf.addPage('a4','portrait');
-      pdf.addImage(c.toDataURL('image/jpeg',.82),'JPEG',0,0,595.28,841.89,undefined,'FAST');
+      pdf.addImage(c.toDataURL('image/jpeg',.85),'JPEG',0,0,595.28,841.89,undefined,'FAST');
       if(nb.pages.length>3)progress('Preparing PDF','page '+(i+1)+' of '+nb.pages.length,(i+1)/nb.pages.length);
     }}finally{lock&&lock.release().catch(()=>{});progress()}
     await saveFile(safeName(nb.title)+'.pdf',pdf.output('blob'));
@@ -699,7 +750,7 @@ $('#pdfInput').onchange=async()=>{
     const lib=window.pdfjsLib;lib.GlobalWorkerOptions.workerSrc=PDFJS_WORKER;
     const doc=await lib.getDocument({data:new Uint8Array(await file.arrayBuffer())}).promise;
     const n=doc.numPages;if(n>1000)throw new Error('toolong');
-    if(n>60&&!await confirmBox('Import '+n+' pages?','This takes about '+Math.max(2,Math.round(n/90))+'–'+Math.max(3,Math.round(n/45))+' minutes. Keep Inkwell open and the screen on until it finishes. Pages you’ve imported are kept even if it stops part-way.','Import'))return;
+    if(n>60&&!await confirmBox('Import '+n+' pages?','This takes about '+Math.max(2,Math.round(n/50))+'–'+Math.max(3,Math.round(n/25))+' minutes. Keep Inkwell open and the screen on until it finishes. Pages you’ve imported are kept even if it stops part-way.','Import'))return;
     lock=await wakeLock();importingId=id;started=true;saveMeta(false);
     const c=document.createElement('canvas');const ctx=c.getContext('2d');
     const inflight=new Set();const t0=Date.now();
@@ -707,13 +758,14 @@ $('#pdfInput').onchange=async()=>{
       if(i>3){const left=Math.round((Date.now()-t0)/(i-1)*(n-i+1)/60000);progress('Importing '+title,'Page '+i+' of '+n+(left>=1?' · about '+left+' min left':''),(i-1)/n)}
       else progress('Importing '+title,'Page '+i+' of '+n,(i-1)/n);
       const page=await doc.getPage(i);const v1=page.getViewport({scale:1});
-      // About 1300px on the long side keeps text sharp and pages small (typically 100–250 KB).
-      let scale=1300/Math.max(v1.width,v1.height),img;
-      for(const q of [.72,.6,.48]){
+      // About 2400px on the long side matches an iPad's screen, so text stays crisp. Each page must stay under
+      // Firestore's 1 MB document limit, so busy pages step down in quality and then size.
+      let scale=2400/Math.max(v1.width,v1.height),img;
+      for(const q of [.86,.78,.7,.62,.55]){
         const vp=page.getViewport({scale});c.width=Math.round(vp.width);c.height=Math.round(vp.height);
         ctx.fillStyle='#fff';ctx.fillRect(0,0,c.width,c.height);
         await page.render({canvasContext:ctx,viewport:vp}).promise;
-        img=c.toDataURL('image/jpeg',q);if(img.length<850000)break;scale*=.85;
+        img=c.toDataURL('image/jpeg',q);if(img.length<950000)break;if(q<.75)scale*=.88;
       }
       page.cleanup();
       const pid='pg'+newId();
