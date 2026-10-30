@@ -94,7 +94,7 @@ svg{display:block}
 .sheet canvas{position:absolute;inset:0;width:100%;height:100%}
 .loading{position:absolute;inset:0;display:grid;place-items:center;color:#5d6979;font-size:.95rem}
 .pager{position:absolute;left:50%;transform:translateX(-50%);bottom:calc(14px + env(safe-area-inset-bottom,0px));display:flex;align-items:center;gap:2px;background:var(--surface);border:1px solid var(--line);border-radius:999px;padding:4px;box-shadow:var(--shadow);z-index:3}
-.pager .count{min-width:64px;text-align:center;font-variant-numeric:tabular-nums;font-size:.9rem;font-weight:700}
+.pager .count{padding:8px 6px;border-radius:8px;min-width:64px;text-align:center;font-variant-numeric:tabular-nums;font-size:.9rem;font-weight:700}
 .zoom{position:absolute;right:calc(14px + env(safe-area-inset-right,0px));bottom:calc(14px + env(safe-area-inset-bottom,0px));display:flex;flex-direction:column;background:var(--surface);border:1px solid var(--line);border-radius:12px;box-shadow:var(--shadow);z-index:3}
 .ed-wrap{flex:1;min-height:0;position:relative;display:flex;flex-direction:column}
 @media (max-width:520px){.zoom{bottom:calc(72px + env(safe-area-inset-bottom,0px))}}
@@ -137,6 +137,11 @@ svg{display:block}
 .signin-card .btn{justify-content:center}
 .linkish{color:var(--accent);font-weight:700;padding:6px 0;align-self:flex-start}
 .err{color:var(--danger);font-size:.92rem;min-height:1.2em}
+.progress{position:fixed;left:50%;transform:translateX(-50%);bottom:calc(18px + env(safe-area-inset-bottom,0px));width:min(92vw,420px);box-sizing:border-box;background:var(--surface);color:var(--fg);border:1px solid var(--line);border-radius:14px;box-shadow:var(--shadow);padding:12px 14px;z-index:30;display:flex;flex-direction:column;gap:4px}
+.progress strong{font-size:.95rem;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.progress span{font-size:.85rem;color:var(--muted);font-variant-numeric:tabular-nums}
+.progress .track{height:6px;border-radius:3px;background:var(--accent-soft);overflow:hidden;margin-top:4px}
+.progress .track i{display:block;height:100%;width:0;background:var(--accent);transition:width .3s}
 .toast{position:fixed;left:50%;transform:translateX(-50%);top:calc(14px + env(safe-area-inset-top,0px));background:var(--fg);color:var(--desk);padding:10px 16px;border-radius:12px;z-index:30;font-size:.92rem;max-width:min(90vw,420px);text-align:center;box-shadow:var(--shadow)}
 @media (prefers-reduced-motion:reduce){*{transition:none!important}}
 </style>
@@ -210,7 +215,7 @@ svg{display:block}
       </div>
       <nav class="pager" aria-label="Pages">
         <button id="prev" class="icon-btn" type="button" aria-label="Previous page"><svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.3" stroke-linecap="round" stroke-linejoin="round"><path d="M15 5l-7 7 7 7"/></svg></button>
-        <span id="count" class="count">1 / 1</span>
+        <button id="count" class="count" type="button" aria-label="Go to page">1 / 1</button>
         <button id="next" class="icon-btn" type="button" aria-label="Next page"><svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.3" stroke-linecap="round" stroke-linejoin="round"><path d="M9 5l7 7-7 7"/></svg></button>
         <button id="addPage" class="icon-btn" type="button" aria-label="Add a page after this one"><svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.3" stroke-linecap="round"><path d="M12 5v14M5 12h14"/></svg></button>
       </nav>
@@ -236,6 +241,7 @@ svg{display:block}
 
   <div id="modal" class="modal" hidden><div class="card" id="card" role="dialog" aria-modal="true"></div></div>
   <div id="toast" class="toast" hidden></div>
+  <div id="progress" class="progress" role="status" aria-live="polite" hidden><strong id="progTitle"></strong><span id="progDetail"></span><div class="track"><i id="progBar"></i></div></div>
 </div>
 
 <script type="module">
@@ -307,7 +313,7 @@ function renderLibrary(){
   for(const [id,nb] of list){
     const n=(nb.pages||[]).length;
     shelf.append(el('div',{class:'nb'},
-      el('button',{class:'cover',type:'button',style:'--c:'+(nb.color||COVERS[0]),onclick:()=>openNotebook(id),'aria-label':'Open '+nb.title},el('span',{class:'label'},nb.title||'Untitled'),nb.pdf?el('span',{class:'kind'},'PDF'):null),
+      el('button',{class:'cover',type:'button',style:'--c:'+(nb.color||COVERS[0]),onclick:()=>openNotebook(id),'aria-label':'Open '+nb.title},el('span',{class:'label'},nb.title||'Untitled'),nb.pdf?el('span',{class:'kind'},nb.importing?(importingId===id?'IMPORTING…':'PDF · INCOMPLETE'):'PDF'):null),
       el('div',{class:'nb-meta'},el('span',null,n+(n===1?' page':' pages')+' · '+ago(nb.updated)),
         el('button',{class:'icon-btn',type:'button','aria-label':'Notebook options',onclick:()=>nbOptions(id)},svgDots()))));
   }
@@ -409,13 +415,14 @@ function drawStroke(ctx,st){
 function curNb(){return S.notebooks.get(S.nbId)}
 function curPage(){const nb=curNb();return nb&&nb.pages[S.pageIdx]}
 /* PDF page backgrounds: one JPEG per page, stored at notebooks/{nb}/bgs/{pageId} */
-const bgs=new Map();
+const bgs=new Map();const BG_KEEP=14;
 function bgFor(pid,nbId){
-  let b=bgs.get(pid);if(b)return b;
+  let b=bgs.get(pid);if(b){bgs.delete(pid);bgs.set(pid,b);return b}
   b={img:null,failed:false};bgs.set(pid,b);
+  if(bgs.size>BG_KEEP){const cur=curPage()&&curPage().id;for(const k of bgs.keys()){if(bgs.size<=BG_KEEP)break;if(k!==cur&&k!==pid&&bgs.get(k).img)bgs.delete(k)}}
   b.ready=(async()=>{try{const snap=await S.lib.doc(nbId||S.nbId).collection('bgs').doc(pid).get();const d=snap.exists()&&snap.data();if(!d||!d.img)throw 0;
     const img=new Image();img.src=d.img;await img.decode();b.img=img;}catch(e){b.failed=true;bgs.delete(pid)}
-    if(S.nbId&&curPage()&&curPage().id===pid)scheduleBase();if(!$('#drawer').hidden)renderThumbs();})();
+    if(S.nbId&&curPage()&&curPage().id===pid)scheduleBase();if(b.onload)b.onload();})();
   return b;
 }
 function renderPageTo(ctx,scale,page){ctx.setTransform(scale,0,0,scale,0,0);drawTemplate(ctx,page.tpl,null,page.id);for(const st of (S.strokes.get(page.id)||[]))drawStroke(ctx,st)}
@@ -468,11 +475,20 @@ function renderTools(){
   if(SIZES[S.tool]){[0,1,2].forEach(i=>{const d=[5,9,14][i];sz.append(el('button',{class:'size',type:'button','aria-label':['Fine','Medium','Thick'][i],'aria-pressed':S.size[S.tool]===i,onclick:()=>{S.size[S.tool]=i;setPref('size',S.size);renderTools()}},el('i',{style:`width:${d}px;height:${d}px`})))})}
 }
 function goPage(i){const nb=curNb();if(!nb)return;S.pageIdx=Math.max(0,Math.min(nb.pages.length-1,i));setPref('page.'+S.nbId,S.pageIdx);vp.scrollTop=0;refreshEditorChrome();scheduleBase()}
+let thumbObs=null;
+function drawThumb(c){const pg=curNb()&&curNb().pages[+c.dataset.i];if(!pg)return;const ctx=c.getContext('2d');
+  if(pg.tpl==='pdf'){const b=bgFor(pg.id);if(!b.img){ctx.setTransform(1,0,0,1,0,0);ctx.fillStyle='#fff';ctx.fillRect(0,0,200,283);b.onload=()=>{if(c.isConnected)renderPageTo(ctx,200/PW,pg)};return}}
+  renderPageTo(ctx,200/PW,pg)}
 function renderThumbs(){
   const nb=curNb();const box=$('#thumbs');box.replaceChildren();
   $('#drawerTitle').textContent=nb.pages.length+(nb.pages.length===1?' page':' pages');
-  nb.pages.forEach((pg,i)=>{const c=el('canvas',{width:'200',height:'283'});const ctx=c.getContext('2d');renderPageTo(ctx,200/PW,pg);
-    box.append(el('button',{class:'thumb',type:'button','aria-current':i===S.pageIdx,onclick:()=>{goPage(i);if(innerWidth<700)$('#drawer').hidden=true}},c,'Page '+(i+1)))});
+  if(thumbObs)thumbObs.disconnect();
+  thumbObs=new IntersectionObserver(es=>{for(const e of es)if(e.isIntersecting){thumbObs.unobserve(e.target);drawThumb(e.target)}},{root:box,rootMargin:'400px 0px'});
+  let current=null;
+  nb.pages.forEach((pg,i)=>{const c=el('canvas',{width:'200',height:'283','data-i':String(i)});thumbObs.observe(c);
+    const b=el('button',{class:'thumb',type:'button','aria-current':i===S.pageIdx,onclick:()=>{goPage(i);if(innerWidth<700)$('#drawer').hidden=true}},c,'Page '+(i+1));
+    if(i===S.pageIdx)current=b;box.append(b)});
+  if(current)requestAnimationFrame(()=>current.scrollIntoView({block:'center'}));
 }
 
 async function openNotebook(id){
@@ -595,6 +611,7 @@ $('#back').onclick=()=>{if(history.state&&history.state.nb)history.back();else c
 $('#tools').addEventListener('click',e=>{const b=e.target.closest('[data-tool]');if(!b)return;S.tool=b.dataset.tool;setPref('tool',S.tool);renderTools()});
 $('#penOnly').onclick=()=>{S.penOnly=!S.penOnly;setPref('penOnly',S.penOnly);if(S.penOnly&&S.tool==='hand')S.tool='p';renderTools();toast(S.penOnly?'Pencil only: fingers scroll and zoom.':'Fingers draw now. Use two fingers to scroll and zoom.')};
 $('#undo').onclick=()=>undoRedo(true);$('#redo').onclick=()=>undoRedo(false);
+$('#count').onclick=async()=>{const n=curNb().pages.length;if(n<2)return;const v=await nameBox('Go to page (1–'+n+')',String(S.pageIdx+1),'Go');const k=parseInt(v,10);if(k>=1&&k<=n)goPage(k-1)};
 $('#prev').onclick=()=>goPage(S.pageIdx-1);$('#next').onclick=()=>goPage(S.pageIdx+1);
 $('#zin').onclick=()=>setZoom(S.zoom*1.25);$('#zout').onclick=()=>setZoom(S.zoom/1.25);$('#zfit').onclick=()=>{S.zoom=1;layoutSheet();scheduleBase()};
 $('#addPage').onclick=()=>{if(S.readOnly)return toast('This view can read notebooks but can’t save changes.');const nb=curNb();const cur=curPage();const pages=nb.pages.slice();pages.splice(S.pageIdx+1,0,{id:'pg'+newId(),tpl:cur.tpl==='pdf'?(nb.tpl&&nb.tpl!=='pdf'?nb.tpl:'blank'):(cur.tpl||nb.tpl)});saveNb(S.nbId,{...nb,pages,updated:Date.now()});goPage(S.pageIdx+1)};
@@ -631,7 +648,10 @@ function loadScript(src){if(!scripts.has(src))scripts.set(src,new Promise((res,r
 const PDFJS='https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.min.js';
 const PDFJS_WORKER='https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.worker.min.js';
 const JSPDF='https://cdnjs.cloudflare.com/ajax/libs/jspdf/2.5.1/jspdf.umd.min.js';
-let busy=false;
+let busy=false,importingId=null;
+async function wakeLock(){try{return navigator.wakeLock?await navigator.wakeLock.request('screen'):null}catch(e){return null}}
+function progress(title,detail,frac){const p=$('#progress');if(!title){p.hidden=true;return}
+  p.hidden=false;$('#progTitle').textContent=title;$('#progDetail').textContent=detail||'';$('#progBar').style.width=Math.round((frac||0)*100)+'%'}
 
 $('#mExport').onclick=()=>{$('#menu').hidden=true;const pg=curPage();const c=document.createElement('canvas');c.width=1600;c.height=Math.round(1600*PH/PW);
   const go=()=>{renderPageTo(c.getContext('2d'),1600/PW,pg);c.toBlob(b=>saveFile(safeName(curNb().title)+' - page '+(S.pageIdx+1)+'.png',b),'image/png')};
@@ -641,19 +661,19 @@ $('#mPdf').onclick=async()=>{
   $('#menu').hidden=true;if(busy)return;busy=true;
   const nb=curNb(),id=S.nbId;
   try{
-    toast('Preparing PDF…');
+    progress('Preparing PDF','',0);
     await loadScript(JSPDF);
     const pdf=new window.jspdf.jsPDF({unit:'pt',format:'a4',compress:true});
-    const c=document.createElement('canvas');c.width=1240;c.height=1754;const ctx=c.getContext('2d');
-    for(let i=0;i<nb.pages.length;i++){
+    const c=document.createElement('canvas');c.width=1100;c.height=1556;const ctx=c.getContext('2d');const lock=await wakeLock();
+    try{for(let i=0;i<nb.pages.length;i++){
       if(S.nbId!==id)return;
       const pg=nb.pages[i];
       if(pg.tpl==='pdf'){const b=bgFor(pg.id);if(!b.img)await b.ready}
-      renderPageTo(ctx,1240/PW,pg);
+      renderPageTo(ctx,1100/PW,pg);
       if(i)pdf.addPage('a4','portrait');
-      pdf.addImage(c.toDataURL('image/jpeg',.88),'JPEG',0,0,595.28,841.89,undefined,'FAST');
-      if(nb.pages.length>3)toast('Preparing PDF… page '+(i+1)+' of '+nb.pages.length);
-    }
+      pdf.addImage(c.toDataURL('image/jpeg',.82),'JPEG',0,0,595.28,841.89,undefined,'FAST');
+      if(nb.pages.length>3)progress('Preparing PDF','page '+(i+1)+' of '+nb.pages.length,(i+1)/nb.pages.length);
+    }}finally{lock&&lock.release().catch(()=>{});progress()}
     await saveFile(safeName(nb.title)+'.pdf',pdf.output('blob'));
   }catch(e){toast(e&&e.message==='offline'?'Connect to the internet to create a PDF, then try again.':'Couldn’t create the PDF. Try again.')}
   finally{busy=false}
@@ -663,38 +683,49 @@ $('#importPdf').onclick=()=>{if(busy)return toast('An import is already running.
 $('#pdfInput').onchange=async()=>{
   const file=$('#pdfInput').files[0];if(!file)return;
   if(!S.db)return toast('Sign in first to import a PDF.');
-  busy=true;const id='nb'+newId();let written=0;
+  busy=true;const id='nb'+newId();let pages=[],started=false,lock=null;
+  const title=file.name.replace(/\.pdf$/i,'')||'Imported PDF';
+  const color=COVERS[Math.floor(Math.random()*COVERS.length)],created=Date.now();
+  const saveMeta=done=>saveNb(id,{title,color,tpl:'blank',pdf:true,pages:pages.slice(),created,updated:Date.now(),importing:!done});
   try{
-    toast('Opening '+file.name+'…');
+    progress('Opening '+file.name,'',0);
     await loadScript(PDFJS);
     const lib=window.pdfjsLib;lib.GlobalWorkerOptions.workerSrc=PDFJS_WORKER;
     const doc=await lib.getDocument({data:new Uint8Array(await file.arrayBuffer())}).promise;
-    const n=doc.numPages;if(n>300)throw new Error('toolong');
-    const pages=[];const c=document.createElement('canvas');const ctx=c.getContext('2d');
+    const n=doc.numPages;if(n>1000)throw new Error('toolong');
+    if(n>60&&!await confirmBox('Import '+n+' pages?','This takes about '+Math.max(2,Math.round(n/90))+'–'+Math.max(3,Math.round(n/45))+' minutes. Keep Inkwell open and the screen on until it finishes. Pages you’ve imported are kept even if it stops part-way.','Import'))return;
+    lock=await wakeLock();importingId=id;started=true;saveMeta(false);
+    const c=document.createElement('canvas');const ctx=c.getContext('2d');
+    const inflight=new Set();const t0=Date.now();
     for(let i=1;i<=n;i++){
-      toast('Importing page '+i+' of '+n+'…');
+      if(i>3){const left=Math.round((Date.now()-t0)/(i-1)*(n-i+1)/60000);progress('Importing '+title,'Page '+i+' of '+n+(left>=1?' · about '+left+' min left':''),(i-1)/n)}
+      else progress('Importing '+title,'Page '+i+' of '+n,(i-1)/n);
       const page=await doc.getPage(i);const v1=page.getViewport({scale:1});
-      // About 1400px on the long side keeps text sharp and each page well under Firestore's 1 MB limit.
-      let scale=1400/Math.max(v1.width,v1.height),img;
-      for(let q of [.8,.65,.5]){
+      // About 1300px on the long side keeps text sharp and pages small (typically 100–250 KB).
+      let scale=1300/Math.max(v1.width,v1.height),img;
+      for(const q of [.72,.6,.48]){
         const vp=page.getViewport({scale});c.width=Math.round(vp.width);c.height=Math.round(vp.height);
         ctx.fillStyle='#fff';ctx.fillRect(0,0,c.width,c.height);
         await page.render({canvasContext:ctx,viewport:vp}).promise;
-        img=c.toDataURL('image/jpeg',q);if(img.length<900000)break;scale*=.85;
+        img=c.toDataURL('image/jpeg',q);if(img.length<850000)break;scale*=.85;
       }
+      page.cleanup();
       const pid='pg'+newId();
-      await S.lib.doc(id).collection('bgs').doc(pid).set({img,w:c.width,h:c.height});written++;
-      pages.push({id:pid,tpl:'pdf'});page.cleanup();
+      const w=S.lib.doc(id).collection('bgs').doc(pid).set({img,w:c.width,h:c.height}).then(()=>inflight.delete(w));
+      inflight.add(w);pages.push({id:pid,tpl:'pdf'});
+      if(inflight.size>=4)await Promise.race(inflight);
+      if(i%15===0)saveMeta(false);
     }
-    const now=Date.now();
-    await saveNb(id,{title:file.name.replace(/\.pdf$/i,'')||'Imported PDF',color:COVERS[Math.floor(Math.random()*COVERS.length)],tpl:'blank',pdf:true,pages,created:now,updated:now});
+    await Promise.all(inflight);
+    await doc.destroy();
+    saveMeta(true);importingId=null;renderLibrary();
     toast('Imported '+n+(n===1?' page':' pages'));
     openNotebook(id);
   }catch(e){
-    const m=e&&e.message;
-    toast(m==='offline'?'Connect to the internet to import a PDF, then try again.':m==='toolong'?'That PDF has more than 300 pages. Split it into smaller files and import each one.':e&&e.name==='PasswordException'?'That PDF is password-protected. Remove the password and try again.':e&&e.code==='resource-exhausted'?'Your free storage allowance is used up for today. Try again tomorrow.':'Couldn’t import that PDF. Check it opens on this device and try again.');
-    if(written){const ref=S.lib.doc(id).collection('bgs');ref.get().then(sn=>sn.docs.forEach(d=>ref.doc(d.id).delete())).catch(()=>{})}
-  }finally{busy=false}
+    const m=e&&e.message;importingId=null;
+    if(started&&pages.length)saveMeta(false);
+    toast(m==='offline'?'Connect to the internet to import a PDF, then try again.':m==='toolong'?'That PDF has more than 1,000 pages. Split it into smaller files and import each one.':e&&e.name==='PasswordException'?'That PDF is password-protected. Remove the password and try again.':e&&e.code==='resource-exhausted'?'Your Firebase storage allowance is used up for today. The pages imported so far are saved.':started?'The import stopped part-way. The pages imported so far are saved in the notebook.':'Couldn’t import that PDF. Check it opens on this device and try again.');
+  }finally{busy=false;progress();lock&&lock.release().catch(()=>{});renderLibrary()}
 };
 
 /* Android back button / back gesture closes the notebook instead of leaving the app */
