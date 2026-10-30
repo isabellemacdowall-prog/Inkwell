@@ -170,7 +170,7 @@ svg{display:block}
           <h1>Notebooks</h1>
           <p>Write on your iPad, carry on from your phone. Every stroke saves to your account, private to you.</p>
         </div>
-        <div style="display:flex;gap:8px;flex-wrap:wrap"><button id="installBtn" class="btn" type="button" hidden>Install app</button><button id="signOut" class="btn" type="button">Sign out</button><button id="importPdf" class="btn" type="button"><svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 15V4M7.5 8.5L12 4l4.5 4.5"/><path d="M4 14v4.5A1.5 1.5 0 005.5 20h13a1.5 1.5 0 001.5-1.5V14"/></svg>Import PDF</button><input id="pdfInput" type="file" accept="application/pdf,.pdf" hidden><button id="newNb" class="btn primary" type="button"><svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round"><path d="M12 5v14M5 12h14"/></svg>New notebook</button></div>
+        <div style="display:flex;gap:8px;flex-wrap:wrap"><button id="installBtn" class="btn" type="button" hidden>Install app</button><button id="signOut" class="btn" type="button">Sign out</button><button id="backupBtn" class="btn" type="button"><svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.1" stroke-linecap="round" stroke-linejoin="round"><path d="M7 18a4.5 4.5 0 01-.5-8.97A6 6 0 0118 8.5a4 4 0 01-.5 9.5"/><path d="M12 12v8M9 15l3-3 3 3"/></svg>Backup</button><input id="restoreInput" type="file" accept="application/json,.json" hidden><button id="importPdf" class="btn" type="button"><svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 15V4M7.5 8.5L12 4l4.5 4.5"/><path d="M4 14v4.5A1.5 1.5 0 005.5 20h13a1.5 1.5 0 001.5-1.5V14"/></svg>Import PDF</button><input id="pdfInput" type="file" accept="application/pdf,.pdf" hidden><button id="newNb" class="btn primary" type="button"><svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round"><path d="M12 5v14M5 12h14"/></svg>New notebook</button></div>
       </div>
       <div id="libNotice" class="notice" hidden></div>
       <div id="installHint" class="notice install" hidden>
@@ -947,6 +947,68 @@ $('#pdfInput').onchange=async()=>{
     toast(e&&e.message==='offline'?'Connect to the internet to import a PDF, then try again.':e&&e.name==='PasswordException'?'That PDF is password-protected. Remove the password and try again.':e&&e.code==='resource-exhausted'?'Your Firebase storage allowance is used up for today. Try again tomorrow.':'Couldn’t import that PDF. Check it opens on this device and try again.');
     if(written){const ref=S.lib.doc(id).collection('pdf');ref.get().then(sn=>sn.docs.forEach(d=>ref.doc(d.id).delete())).catch(()=>{})}
   }finally{busy=false;importingId=null;progress();lock&&lock.release().catch(()=>{});renderLibrary()}
+};
+
+/* ---------- Backup & restore ----------
+   A backup is one .json file holding every notebook: its details, handwriting, and any imported PDF. */
+const b64FromBytes=u8=>new Promise((res,rej)=>{const r=new FileReader();r.onload=()=>res(String(r.result).split(',')[1]);r.onerror=rej;r.readAsDataURL(new Blob([u8]))});
+const bytesFromB64=async b=>new Uint8Array(await (await fetch('data:application/octet-stream;base64,'+b)).arrayBuffer());
+async function makeBackup(){
+  const ids=[...S.notebooks.keys()];if(!ids.length)return toast('There are no notebooks to back up yet.');
+  busy=true;let lock=await wakeLock();
+  try{
+    const parts=['{"app":"inkwell","version":1,"created":'+JSON.stringify(new Date().toISOString())+',"notebooks":['];
+    for(let i=0;i<ids.length;i++){
+      const id=ids[i],meta=S.notebooks.get(id),ref=S.lib.doc(id);
+      progress('Backing up',(meta.title||'Untitled')+' · '+(i+1)+' of '+ids.length,i/ids.length);
+      const chunks={};for(const d of (await ref.collection('chunks').get()).docs)chunks[d.id]=d.data();
+      const bgs={};for(const d of (await ref.collection('bgs').get()).docs)bgs[d.id]=d.data();
+      const pdf=[];for(const d of (await ref.collection('pdf').get()).docs.sort((a,b)=>a.data().i-b.data().i))pdf.push(await b64FromBytes(d.data().b.toUint8Array()));
+      parts.push((i?',':'')+JSON.stringify({id,meta,chunks,bgs,pdf}));
+    }
+    parts.push(']}');
+    progress('Backing up','Saving file…',1);
+    const d=new Date(),stamp=d.getFullYear()+'-'+String(d.getMonth()+1).padStart(2,'0')+'-'+String(d.getDate()).padStart(2,'0');
+    await saveFile('Inkwell backup '+stamp+'.json',new Blob(parts,{type:'application/json'}));
+    setPref('lastBackup',Date.now());
+  }catch(e){console.error(e);toast('Couldn’t make the backup. Check your connection and try again.')}
+  finally{busy=false;progress();lock&&lock.release().catch(()=>{})}
+}
+$('#restoreInput').onchange=async()=>{
+  const file=$('#restoreInput').files[0];if(!file)return;
+  let data;try{data=JSON.parse(await file.text())}catch(e){return toast('That file isn’t an Inkwell backup.')}
+  if(!data||data.app!=='inkwell'||!Array.isArray(data.notebooks))return toast('That file isn’t an Inkwell backup.');
+  const n=data.notebooks.length;
+  if(!await confirmBox('Restore '+n+(n===1?' notebook':' notebooks')+'?','From a backup made '+new Date(data.created).toLocaleString()+'. They’re added alongside your current notebooks; nothing is replaced.','Restore'))return;
+  busy=true;const lock=await wakeLock();let done=0;
+  try{
+    const titles=new Set([...S.notebooks.values()].map(x=>x.title));
+    for(const nb of data.notebooks){
+      const id='nb'+newId(),ref=S.lib.doc(id);
+      progress('Restoring',(nb.meta.title||'Untitled')+' · '+(done+1)+' of '+n,done/n);
+      for(const [k,v] of Object.entries(nb.chunks||{}))await ref.collection('chunks').doc(k).set(v);
+      for(const [k,v] of Object.entries(nb.bgs||{}))await ref.collection('bgs').doc(k).set(v);
+      for(let i=0;i<(nb.pdf||[]).length;i++)await ref.collection('pdf').doc(String(i).padStart(4,'0')).set({i,b:Bytes.fromUint8Array(await bytesFromB64(nb.pdf[i]))});
+      const meta={...nb.meta,updated:Date.now()};if(titles.has(meta.title))meta.title=(meta.title||'Untitled')+' (restored)';
+      if(meta.pdfParts)meta.pdfParts=(nb.pdf||[]).length;delete meta.importing;
+      await saveNb(id,meta);done++;
+    }
+    toast('Restored '+done+(done===1?' notebook':' notebooks'));
+  }catch(e){console.error(e);toast(done?'Restored '+done+' of '+n+' notebooks, then stopped. Try restoring again for the rest.':'Couldn’t restore that backup. Check your connection and try again.')}
+  finally{busy=false;progress();lock&&lock.release().catch(()=>{})}
+};
+$('#backupBtn').onclick=async()=>{
+  if(busy)return toast('Please wait for the current task to finish.');
+  const last=pref('lastBackup',0);
+  const pick=await modal((c,close)=>{c.append(el('h2',null,'Backup'),
+    el('p',null,'Save all your notebooks, handwriting and imported PDFs into one file. Keep it somewhere safe, like Files, iCloud Drive or Google Drive.'),
+    el('p',null,last?'Last backup from this device: '+new Date(last).toLocaleString():'You haven’t made a backup on this device yet.'),
+    el('div',{class:'actions',style:'justify-content:stretch;flex-direction:column'},
+      el('button',{class:'btn primary',type:'button',onclick:()=>close('backup')},'Download backup'),
+      el('button',{class:'btn',type:'button',onclick:()=>close('restore')},'Restore from a backup file'),
+      el('button',{class:'btn',type:'button',onclick:()=>close(null)},'Cancel')))});
+  if(pick==='backup')makeBackup();
+  if(pick==='restore'){$('#restoreInput').value='';$('#restoreInput').click()}
 };
 
 /* Home-screen install: iPad/iPhone Safari gets instructions, Chrome/Android/desktop get an Install button */
