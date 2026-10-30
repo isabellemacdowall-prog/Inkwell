@@ -251,7 +251,7 @@ svg{display:block}
         <button id="mExport" type="button">Save page as image</button>
         <button id="mRename" type="button">Rename notebook</button>
         <button id="mDelPage" class="danger" type="button">Delete this page</button>
-        <div class="lbl" style="text-transform:none;letter-spacing:0">Inkwell version 15</div>
+        <div class="lbl" style="text-transform:none;letter-spacing:0">Inkwell version 16</div>
       </div>
     </div>
   </section>
@@ -749,7 +749,7 @@ vp.addEventListener('pointerdown',e=>{
   if(e.pointerType==='pen'){
     penDown=true;if(pinch)pinchEnd();
     if(!S.penOnly){S.penOnly=true;setPref('penOnly',true);if(S.tool==='hand')S.tool='p';renderTools();toast('Pencil detected. Fingers now scroll and zoom; switch off “Pencil only” to draw with a finger.')}
-    touches.clear();if(drawing&&drawing.touch)endDraw(true);
+    touches.clear();if(drawing){if(drawing.touch)endDraw(true);else endDraw(false)}
     return startDraw(e);
   }
   stopFling();
@@ -770,7 +770,8 @@ vp.addEventListener('pointermove',e=>{
 });
 const up=e=>{
   if(e.pointerType==='pen')penDown=false;
-  if(drawing&&drawing.id===e.pointerId)endDraw(e.type==='pointercancel'&&!!drawing.st);
+  if(drawing&&drawing.id===e.pointerId){const pen=e.pointerType==='pen'||!drawing.touch;
+    endDraw(e.type==='pointercancel'&&!!drawing.st&&!(pen&&drawing.st.p.length>=6))}
   if(touches.has(e.pointerId)){const t=touches.get(e.pointerId);touches.delete(e.pointerId);
     if(pinch&&touches.size<2)pinchEnd();
     else if(t.axis==='swipe'){if(e.type==='pointerup')swipeEnd(t);else settleSheet()}
@@ -787,6 +788,10 @@ vp.addEventListener('wheel',e=>{
     if(Math.abs(wheelX)>120){turnPage(wheelX>0?1:-1);wheelX=0;wheelLock=now+600}}
 },{passive:false});
 ['gesturestart','gesturechange','contextmenu'].forEach(t=>vp.addEventListener(t,e=>e.preventDefault()));
+['touchstart','touchmove'].forEach(t=>vp.addEventListener(t,e=>{if(e.cancelable)e.preventDefault()},{passive:false}));
+// Backstop: if the stroke's end is delivered somewhere other than the page, still finish it.
+addEventListener('pointerup',e=>{if(drawing&&drawing.id===e.pointerId)up(e)});
+addEventListener('pointercancel',e=>{if(drawing&&drawing.id===e.pointerId)up(e)});
 
 /* ---------- wiring ---------- */
 $('#newNb').onclick=createNotebook;
