@@ -90,6 +90,10 @@ svg{display:block}
 .size i{background:var(--fg);border-radius:50%}
 .size[aria-pressed="true"]{background:var(--accent-soft)}
 .chip{flex:none;padding:7px 12px;border-radius:999px;border:1px solid var(--line);font-size:.82rem;font-weight:700;white-space:nowrap}
+.chip.lock{display:inline-flex;align-items:center;gap:6px}
+.ed-wrap.locked .zoom,.ed-wrap.locked .pager button:not(.count){display:none}
+.ed-wrap.locked .pager .count{pointer-events:none}
+.ed-wrap.locked .vp{overflow:hidden}
 .chip[aria-pressed="true"]{background:var(--accent);color:var(--accent-ink);border-color:transparent}
 .vp{flex:1;min-height:0;overflow:auto;position:relative;touch-action:none;-webkit-user-select:none;user-select:none;-webkit-touch-callout:none;padding:16px}
 .sheet{position:relative;margin:0 auto;background:var(--paper);box-shadow:var(--shadow);border-radius:2px}
@@ -209,6 +213,7 @@ svg{display:block}
         <button id="redo" class="icon-btn" type="button" aria-label="Redo"><svg width="21" height="21" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.1" stroke-linecap="round" stroke-linejoin="round"><path d="M15 14l5-5-5-5"/><path d="M20 9H9.5a5.5 5.5 0 000 11H13"/></svg></button>
         <span class="sep"></span>
         <button id="penOnly" class="chip" type="button" aria-pressed="false">Pencil only</button>
+        <button id="lockBtn" class="chip lock" type="button" aria-pressed="false" aria-label="Lock page"><svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.3" stroke-linecap="round" stroke-linejoin="round"><rect x="5" y="11" width="14" height="10" rx="2"/><path d="M8 11V8a4 4 0 018 0v3"/></svg><span>Lock</span></button>
       </div>
     </header>
     <div class="ed-wrap">
@@ -286,7 +291,7 @@ const newId=()=>Date.now().toString(36)+Math.random().toString(36).slice(2,7);
 const el=(t,a,...kids)=>{const n=document.createElement(t);if(a)for(const k in a){if(k==='class')n.className=a[k];else if(k==='style')n.style.cssText=a[k];else if(k.startsWith('on'))n.addEventListener(k.slice(2),a[k]);else n.setAttribute(k,a[k])}for(const c of kids)if(c!=null)n.append(c);return n};
 
 const S={db:null,uid:null,lib:null,notebooks:new Map(),nbId:null,pageIdx:0,
-  tool:pref('tool','p'),ink:pref('ink',INKS[0]),high:pref('high',HIGHS[0]),size:pref('size',{p:1,h:1,e:1}),
+  tool:pref('tool','p'),locked:pref('locked',false),ink:pref('ink',INKS[0]),high:pref('high',HIGHS[0]),size:pref('size',{p:1,h:1,e:1}),
   zoom:1,penOnly:pref('penOnly',false),strokes:new Map(),chunks:new Map(),unsub:null,
   undo:new Map(),redo:new Map(),readOnly:false,local:false,downloads:null,ready:false};
 if(!SIZES[S.tool]&&S.tool!=='hand')S.tool='p';
@@ -510,7 +515,8 @@ function refreshEditorChrome(){
 }
 function renderTools(){
   document.querySelectorAll('[data-tool]').forEach(b=>b.setAttribute('aria-pressed',b.dataset.tool===S.tool));
-  $('#handBtn').hidden=S.penOnly;$('#penOnly').setAttribute('aria-pressed',S.penOnly);
+  $('#handBtn').hidden=S.penOnly||S.locked;$('#penOnly').setAttribute('aria-pressed',S.penOnly);
+  $('#lockBtn').setAttribute('aria-pressed',S.locked);document.querySelector('.ed-wrap').classList.toggle('locked',S.locked);if(S.locked&&S.tool==='hand')S.tool='p';
   const sw=$('#swatches');sw.replaceChildren();const sz=$('#sizes');sz.replaceChildren();
   const list=S.tool==='p'?INKS:S.tool==='h'?HIGHS:[];
   for(const c of list){const on=(S.tool==='p'?S.ink:S.high)===c;sw.append(el('button',{class:'swatch',type:'button','aria-label':'Colour','aria-pressed':on,style:'--sw:'+c,onclick:()=>{if(S.tool==='p'){S.ink=c;setPref('ink',c)}else{S.high=c;setPref('high',c)}renderTools()}},el('i')))}
@@ -639,12 +645,14 @@ function pinchStart(){
 }
 function pinchMove(){
   const {d,m}=pinchPoints();
+  if(S.locked){pinch.s=1;pinch.m=m;sheet.style.transform='translateX('+(m[0]-pinch.m0[0])+'px)';return}
   const z=Math.max(.5,Math.min(4,S.zoom*d/pinch.d0));pinch.s=z/S.zoom;pinch.m=m;
   sheet.style.transform='translate('+(m[0]-pinch.m0[0])+'px,'+(m[1]-pinch.m0[1])+'px) scale('+pinch.s+')';
 }
 function pinchEnd(){
   const p=pinch;pinch=null;if(!p)return;
   const mdx=p.m[0]-p.m0[0],mdy=p.m[1]-p.m0[1];
+  if(S.locked&&!(Math.abs(mdx)>90&&Math.abs(mdx)>Math.abs(mdy)*1.3)){sheet.style.willChange='';sheet.style.transformOrigin='';settleSheet();return}
   if(Math.abs(p.s-1)<.06&&Math.abs(mdx)>90&&Math.abs(mdx)>Math.abs(mdy)*1.3){
     sheet.style.willChange='';sheet.style.transformOrigin='';sheet.style.transform='translateX('+mdx+'px)';turnPage(mdx<0?1:-1);return}
   const before=sheet.getBoundingClientRect();
@@ -665,8 +673,9 @@ function touchPan(e){
   const nx=e.clientX,ny=e.clientY,dt=Math.max(1,e.timeStamp-(t.t||e.timeStamp-16));
   if(touches.size>=2){t.x=nx;t.y=ny;t.t=e.timeStamp;if(t.axis==='swipe'){t.axis='pan';sheet.style.transform=''}if(!pinch)pinchStart();pinchMove();return}
   if(!t.axis){const ax=nx-t.sx,ay=ny-t.sy;if(Math.hypot(ax,ay)<10)return;
-    t.axis=Math.abs(ax)>Math.abs(ay)*1.3&&noHScroll()?'swipe':'pan';if(t.axis==='swipe')sheet.style.transition='none'}
+    t.axis=Math.abs(ax)>Math.abs(ay)*1.3&&(S.locked||noHScroll())?'swipe':(S.locked?'none':'pan');if(t.axis==='swipe')sheet.style.transition='none'}
   if(t.axis==='swipe'){const ddx=nx-t.x;t.dx=swipeMove(t,nx);t.vx=(t.vx||0)*.6+ddx/dt*.4;t.x=nx;t.y=ny;t.t=e.timeStamp;return}
+  if(t.axis==='none'){t.x=nx;t.y=ny;return}
   const dx=nx-t.x,dy=ny-t.y;vp.scrollLeft-=dx;vp.scrollTop-=dy;
   t.vx=(t.vx||0)*.6+dx/dt*.4;t.vy=(t.vy||0)*.6+dy/dt*.4;t.x=nx;t.y=ny;t.t=e.timeStamp;
 }
@@ -731,7 +740,7 @@ vp.addEventListener('pointerdown',e=>{
     if(touches.size===1&&!S.penOnly&&S.tool!=='hand'){touches.delete(e.pointerId);return startDraw(e)}
     return;
   }
-  if(S.tool==='hand'){gesture={x:e.clientX,y:e.clientY,id:e.pointerId};try{vp.setPointerCapture(e.pointerId)}catch(_){}return}
+  if(S.tool==='hand'&&!S.locked){gesture={x:e.clientX,y:e.clientY,id:e.pointerId};try{vp.setPointerCapture(e.pointerId)}catch(_){}return}
   startDraw(e);
 });
 vp.addEventListener('pointermove',e=>{
@@ -745,15 +754,16 @@ const up=e=>{
   if(touches.has(e.pointerId)){const t=touches.get(e.pointerId);touches.delete(e.pointerId);
     if(pinch&&touches.size<2)pinchEnd();
     else if(t.axis==='swipe'){if(e.type==='pointerup')swipeEnd(t);else settleSheet()}
-    else if(!touches.size&&e.type==='pointerup'&&e.timeStamp-(t.t||0)<60)startFling(t.vx||0,t.vy||0);
+    else if(!S.locked&&!touches.size&&e.type==='pointerup'&&e.timeStamp-(t.t||0)<60)startFling(t.vx||0,t.vy||0);
     for(const o of touches.values()){o.sx=o.x;o.sy=o.y;o.axis='pan'}}
   if(gesture&&gesture.id===e.pointerId)gesture=null;
 };
 vp.addEventListener('pointerup',up);vp.addEventListener('pointercancel',up);
 let wheelX=0,wheelT=0,wheelLock=0;
 vp.addEventListener('wheel',e=>{
+  if(S.locked&&!(Math.abs(e.deltaX)>Math.abs(e.deltaY))){e.preventDefault();return}
   if(e.ctrlKey||e.metaKey){e.preventDefault();setZoom(S.zoom*Math.exp(-e.deltaY*.01),e.clientX,e.clientY);return}
-  if(Math.abs(e.deltaX)>Math.abs(e.deltaY)&&noHScroll()){e.preventDefault();const now=performance.now();
+  if(Math.abs(e.deltaX)>Math.abs(e.deltaY)&&(S.locked||noHScroll())){e.preventDefault();const now=performance.now();
     if(now<wheelLock)return;if(now-wheelT>250)wheelX=0;wheelT=now;wheelX+=e.deltaX;
     if(Math.abs(wheelX)>120){turnPage(wheelX>0?1:-1);wheelX=0;wheelLock=now+600}}
 },{passive:false});
@@ -764,6 +774,8 @@ $('#newNb').onclick=createNotebook;
 $('#back').onclick=()=>{if(history.state&&history.state.nb)history.back();else closeNotebook()};
 $('#tools').addEventListener('click',e=>{const b=e.target.closest('[data-tool]');if(!b)return;S.tool=b.dataset.tool;setPref('tool',S.tool);renderTools()});
 $('#penOnly').onclick=()=>{S.penOnly=!S.penOnly;setPref('penOnly',S.penOnly);if(S.penOnly&&S.tool==='hand')S.tool='p';renderTools();toast(S.penOnly?'Pencil only: fingers scroll and zoom.':'Fingers draw now. Use two fingers to scroll and zoom.')};
+$('#lockBtn').onclick=()=>{S.locked=!S.locked;setPref('locked',S.locked);renderTools();
+  toast(S.locked?(S.penOnly?'Page locked. Swipe with one finger, or two, to turn pages.':'Page locked. Swipe with two fingers to turn pages.'):'Page unlocked. You can scroll and zoom again.')};
 $('#undo').onclick=()=>undoRedo(true);$('#redo').onclick=()=>undoRedo(false);
 $('#count').onclick=async()=>{const n=curNb().pages.length;if(n<2)return;const v=await nameBox('Go to page (1–'+n+')',String(S.pageIdx+1),'Go');const k=parseInt(v,10);if(k>=1&&k<=n)goPage(k-1)};
 $('#prev').onclick=()=>goPage(S.pageIdx-1);$('#next').onclick=()=>goPage(S.pageIdx+1);
@@ -1043,7 +1055,7 @@ addEventListener('popstate',()=>{if(!$('#editor').hidden)closeNotebook()});
 new ResizeObserver(()=>{if(!$('#editor').hidden){layoutSheet();scheduleBase()}}).observe(vp);
 document.addEventListener('visibilitychange',()=>{if(document.hidden)flush()});
 addEventListener('pagehide',()=>flush());
-addEventListener('keydown',e=>{if($('#editor').hidden||!$('#modal').hidden)return;if((e.metaKey||e.ctrlKey)&&e.key.toLowerCase()==='z'){e.preventDefault();undoRedo(!e.shiftKey)}else if(e.key==='ArrowRight'&&!e.target.closest('input'))goPage(S.pageIdx+1);else if(e.key==='ArrowLeft'&&!e.target.closest('input'))goPage(S.pageIdx-1)});
+addEventListener('keydown',e=>{if($('#editor').hidden||!$('#modal').hidden)return;if((e.metaKey||e.ctrlKey)&&e.key.toLowerCase()==='z'){e.preventDefault();undoRedo(!e.shiftKey)}else if(S.locked){}else if(e.key==='ArrowRight'&&!e.target.closest('input'))goPage(S.pageIdx+1);else if(e.key==='ArrowLeft'&&!e.target.closest('input'))goPage(S.pageIdx-1)});
 
 /* ---------- boot ---------- */
 if(history.state&&history.state.nb)history.replaceState(null,'');

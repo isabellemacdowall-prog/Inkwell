@@ -9,6 +9,7 @@ A handwriting notebook app (in the spirit of GoodNotes) that installs to the hom
 - Import a PDF (up to 1,000 pages) as a notebook, write on it, and download the whole notebook as a PDF
 - Save any page as an image
 - Swipe left/right to turn pages (one finger in Pencil-only mode, two fingers any time, trackpad on a computer)
+- Lock: freezes the page (no scroll, zoom or page buttons) so only swipes turn pages
 - Backup: download every notebook (handwriting + PDFs) as one .json file, and restore it later
 - Android app (APK) built automatically on every change; iPad uses the home-screen web app
 
