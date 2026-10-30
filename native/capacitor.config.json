@@ -1,0 +1,6 @@
+{
+  "appId": "com.isabellemacdowall.inkwell",
+  "appName": "Inkwell",
+  "webDir": "www",
+  "android": { "backgroundColor": "#e9edf2" }
+}

@@ -1,0 +1,17 @@
+{
+  "name": "inkwell-android",
+  "version": "1.0.0",
+  "private": true,
+  "description": "Build-only dependencies for the Inkwell Android app (installed by GitHub Actions)",
+  "dependencies": {
+    "@capacitor/android": "6.1.2",
+    "@capacitor/core": "6.1.2",
+    "@capacitor/filesystem": "6.0.1",
+    "@capacitor/share": "6.0.2",
+    "firebase": "10.12.2"
+  },
+  "devDependencies": {
+    "@capacitor/cli": "6.1.2",
+    "esbuild": "0.23.1"
+  }
+}
