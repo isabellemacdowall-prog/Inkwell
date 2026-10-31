@@ -251,7 +251,7 @@ svg{display:block}
         <button id="mExport" type="button">Save page as image</button>
         <button id="mRename" type="button">Rename notebook</button>
         <button id="mDelPage" class="danger" type="button">Delete this page</button>
-        <div class="lbl" style="text-transform:none;letter-spacing:0">Inkwell version 17</div>
+        <div class="lbl" style="text-transform:none;letter-spacing:0">Inkwell version 18</div>
       </div>
     </div>
   </section>
@@ -828,17 +828,31 @@ $('#mDelPage').onclick=async()=>{$('#menu').hidden=true;const nb=curNb();if(nb.p
 /* ---------- files: save, PDF export, PDF import ---------- */
 const safeName=t=>(t||'Notebook').replace(/[\\/:*?"<>|]+/g,'').trim()||'Notebook';
 const blobToB64=blob=>new Promise((res,rej)=>{const r=new FileReader();r.onload=()=>res(String(r.result).split(',')[1]);r.onerror=rej;r.readAsDataURL(blob)});
-async function saveFile(name,blob){
-  if(window.Capacitor){
-    if(!window.InkNative)return toast('Saving files isn’t available in this version of the app.');
-    try{await window.InkNative.saveFile(name,await blobToB64(blob))}catch(e){if(!/cancel/i.test(String(e&&e.message)))toast('Couldn’t save the file. Try again.')}
-    return;
-  }
+// Hands a finished file to the person. The iPad only opens the Share sheet straight after a tap, so files that
+// take a while to make (PDFs, backups) are offered with a "Save" button, which supplies that fresh tap.
+function shareOrDownload(name,blob){
   const f=new File([blob],name,{type:blob.type});
   if(matchMedia('(pointer:coarse)').matches&&navigator.canShare&&navigator.canShare({files:[f]})){
-    try{await navigator.share({files:[f],title:name});return}catch(e){if(e&&e.name==='AbortError')return}
+    return navigator.share({files:[f],title:name}).catch(e=>{if(e&&e.name==='AbortError')return;openBlob(blob,name)});
   }
-  const a=document.createElement('a');a.href=URL.createObjectURL(blob);a.download=name;document.body.append(a);a.click();setTimeout(()=>{URL.revokeObjectURL(a.href);a.remove()},4000);
+  const a=document.createElement('a');a.href=URL.createObjectURL(blob);a.download=name;document.body.append(a);a.click();setTimeout(()=>{URL.revokeObjectURL(a.href);a.remove()},60000);
+  return Promise.resolve();
+}
+// Last resort: open the file in the browser's own viewer, which has its own Share/Save button.
+function openBlob(blob,name){const u=URL.createObjectURL(blob);const w=window.open(u,'_blank');if(!w)location.href=u;toast('Use the Share button to save '+name+'.')}
+async function saveFile(name,blob,slow){
+  if(window.Capacitor){
+    if(!window.InkNative)return toast('Saving files isn’t available in this version of the app.');
+    try{progress('Saving '+name,'',1);if(window.InkNative.saveBlob)await window.InkNative.saveBlob(name,blob);else await window.InkNative.saveFile(name,await blobToB64(blob))}
+    catch(e){if(!/cancel/i.test(String(e&&e.message)))toast('Couldn’t save the file ('+((e&&e.message)||'unknown error')+'). Try again.')}
+    finally{progress()}
+    return;
+  }
+  if(!slow)return shareOrDownload(name,blob);
+  const mb=blob.size/1048576;
+  await modal((c,close)=>{c.append(el('h2',null,'Ready to save'),el('p',null,name+' · '+(mb<1?Math.max(1,Math.round(blob.size/1024))+' KB':mb.toFixed(1)+' MB')),
+    el('div',{class:'actions'},el('button',{class:'btn',type:'button',onclick:()=>close()},'Close'),
+      el('button',{class:'btn primary',type:'button',onclick:()=>{shareOrDownload(name,blob);close()}},matchMedia('(pointer:coarse)').matches?'Save or share':'Download')))});
 }
 const scripts=new Map();
 function loadScript(src){if(!scripts.has(src))scripts.set(src,new Promise((res,rej)=>{const t=document.createElement('script');t.src=src;t.onload=res;t.onerror=()=>{scripts.delete(src);rej(new Error('offline'))};document.head.append(t)}));return scripts.get(src)}
@@ -971,8 +985,9 @@ $('#mPdf').onclick=async()=>{
     }
     progress('Preparing PDF','Saving…',1);
     const bytes=await out.save();
-    await saveFile(safeName(nb.title)+'.pdf',new Blob([bytes],{type:'application/pdf'}));
-  }catch(e){console.error(e);toast(e&&e.message==='offline'?'Connect to the internet to create a PDF, then try again.':'Couldn’t create the PDF. Try again.')}
+    progress();
+    await saveFile(safeName(nb.title)+'.pdf',new Blob([bytes],{type:'application/pdf'}),true);
+  }catch(e){console.error(e);toast(e&&e.message==='offline'?'Connect to the internet to create a PDF, then try again.':'Couldn’t create the PDF ('+((e&&e.message)||'unknown error')+'). Try again.')}
   finally{busy=false;progress();lock&&lock.release().catch(()=>{})}
 };
 
@@ -1029,7 +1044,8 @@ async function makeBackup(){
     parts.push(']}');
     progress('Backing up','Saving file…',1);
     const d=new Date(),stamp=d.getFullYear()+'-'+String(d.getMonth()+1).padStart(2,'0')+'-'+String(d.getDate()).padStart(2,'0');
-    await saveFile('Inkwell backup '+stamp+'.json',new Blob(parts,{type:'application/json'}));
+    progress();
+    await saveFile('Inkwell backup '+stamp+'.json',new Blob(parts,{type:'application/json'}),true);
     setPref('lastBackup',Date.now());
   }catch(e){console.error(e);toast('Couldn’t make the backup. Check your connection and try again.')}
   finally{busy=false;progress();lock&&lock.release().catch(()=>{})}

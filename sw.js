@@ -1,6 +1,6 @@
 // Inkwell offline shell. Notebook data is synced by Firestore itself (stored in IndexedDB),
 // so this worker only caches the app files, fonts, the Firebase SDK and the PDF libraries.
-const VERSION = 'inkwell-v18';
+const VERSION = 'inkwell-v19';
 const SHELL = ['./', './index.html', './manifest.webmanifest', './icon-192.png', './icon-512.png', './apple-touch-icon.png'];
 const CACHE_HOSTS = ['fonts.googleapis.com', 'fonts.gstatic.com', 'cdnjs.cloudflare.com'];
 
