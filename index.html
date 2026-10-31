@@ -51,6 +51,7 @@ svg{display:block}
 .lib-inner{max-width:1080px;width:100%;margin:0 auto;padding-left:max(16px,env(safe-area-inset-left,0px));padding-right:max(16px,env(safe-area-inset-right,0px));padding-block:28px 48px;display:flex;flex-direction:column;gap:22px}
 .lib-head{display:flex;flex-wrap:wrap;align-items:flex-end;justify-content:space-between;gap:14px}
 .lib-head h1{font-family:var(--f-display);font-weight:700;font-size:2rem;letter-spacing:-.02em;margin:0;text-wrap:balance}
+.lib-head p.who{font-size:.85rem;margin-top:6px}
 .lib-head p{margin:4px 0 0;color:var(--muted);max-width:46ch}
 .btn{display:inline-flex;align-items:center;gap:8px;padding:10px 16px;border-radius:999px;font-weight:700;background:var(--surface);border:1px solid var(--line)}
 .btn.primary{background:var(--accent);color:var(--accent-ink);border-color:transparent}
@@ -177,6 +178,7 @@ svg{display:block}
         <div>
           <h1>Notebooks</h1>
           <p>Write on your iPad, carry on from your phone. Every stroke saves to your account, private to you.</p>
+          <p id="whoami" class="who"></p>
         </div>
         <div style="display:flex;gap:8px;flex-wrap:wrap"><button id="installBtn" class="btn" type="button" hidden>Install app</button><button id="signOut" class="btn" type="button">Sign out</button><button id="backupBtn" class="btn" type="button"><svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.1" stroke-linecap="round" stroke-linejoin="round"><path d="M7 18a4.5 4.5 0 01-.5-8.97A6 6 0 0118 8.5a4 4 0 01-.5 9.5"/><path d="M12 12v8M9 15l3-3 3 3"/></svg>Backup</button><input id="restoreInput" type="file" accept="application/json,.json" hidden><button id="importPdf" class="btn" type="button"><svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 15V4M7.5 8.5L12 4l4.5 4.5"/><path d="M4 14v4.5A1.5 1.5 0 005.5 20h13a1.5 1.5 0 001.5-1.5V14"/></svg>Import PDF</button><input id="pdfInput" type="file" accept="application/pdf,.pdf" hidden><button id="newNb" class="btn primary" type="button"><svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round"><path d="M12 5v14M5 12h14"/></svg>New notebook</button></div>
       </div>
@@ -251,7 +253,7 @@ svg{display:block}
         <button id="mExport" type="button">Save page as image</button>
         <button id="mRename" type="button">Rename notebook</button>
         <button id="mDelPage" class="danger" type="button">Delete this page</button>
-        <div class="lbl" style="text-transform:none;letter-spacing:0">Inkwell version 19</div>
+        <div class="lbl" style="text-transform:none;letter-spacing:0">Inkwell version 20</div>
       </div>
     </div>
   </section>
@@ -261,6 +263,10 @@ svg{display:block}
   <div id="progress" class="progress" role="status" aria-live="polite" hidden><strong id="progTitle"></strong><span id="progDetail"></span><div class="track"><i id="progBar"></i></div></div>
 </div>
 
+<script>
+addEventListener('error',e=>showFatal(e.message));addEventListener('unhandledrejection',e=>showFatal(e.reason&&e.reason.message||String(e.reason)));
+function showFatal(m){try{const n=document.getElementById('libNotice');if(!n)return;n.hidden=false;n.textContent='Something went wrong while loading: '+m+'. Close Inkwell fully and open it again. Your notebooks are stored in your account.'}catch(_){}}
+</script>
 <script type="module">
 import {initializeApp} from "https://www.gstatic.com/firebasejs/10.12.2/firebase-app.js";
 import {getAuth,onAuthStateChanged,signInWithEmailAndPassword,createUserWithEmailAndPassword,sendPasswordResetEmail,signOut} from "https://www.gstatic.com/firebasejs/10.12.2/firebase-auth.js";
@@ -275,7 +281,9 @@ const firebaseConfig={
 };
 const fbApp=initializeApp(firebaseConfig);
 const auth=getAuth(fbApp);
-const fdb=initializeFirestore(fbApp,{localCache:persistentLocalCache({tabManager:persistentMultipleTabManager(),cacheSizeBytes:400*1024*1024})});
+let fdb;
+try{fdb=initializeFirestore(fbApp,{localCache:persistentLocalCache({tabManager:persistentMultipleTabManager(),cacheSizeBytes:400*1024*1024})})}
+catch(e){console.error(e);fdb=initializeFirestore(fbApp,{})}
 function colRef(path){return{path,doc:id=>docRef(path+'/'+id),get:()=>getDocs(collection(fdb,path)),onSnapshot:(n,e)=>onSnapshot(collection(fdb,path),n,e)}}
 function docRef(path){return{path,collection:c=>colRef(path+'/'+c),set:b=>setDoc(doc(fdb,path),b),get:()=>getDoc(doc(fdb,path)),delete:()=>deleteDoc(doc(fdb,path))}}
 if('serviceWorker' in navigator&&!window.Capacitor){
@@ -332,7 +340,8 @@ function renderLibrary(){
   const shelf=$('#shelf');shelf.replaceChildren();
   const list=[...S.notebooks.entries()].sort((a,b)=>(b[1].updated||0)-(a[1].updated||0));
   $('#emptyShelf').hidden=list.length>0;
-  if(!list.length&&S.ready){$('#emptyTitle').textContent='No notebooks yet';$('#emptyText').textContent='Tap New notebook to start one. It will appear on your other devices as soon as you open this page there.'}
+  if(!list.length&&S.ready&&!S.libLoaded){$('#emptyTitle').textContent='Loading your notebooks…';$('#emptyText').textContent=navigator.onLine?'Fetching them from your account.':'You’re offline. Connect to the internet to load your notebooks.'}
+  else if(!list.length&&S.ready){$('#emptyTitle').textContent='No notebooks yet';$('#emptyText').textContent='Tap New notebook to start one. It will appear on your other devices as soon as you open this page there.'}
   for(const [id,nb] of list){
     const n=(nb.pages||[]).length;
     shelf.append(el('div',{class:'nb'},
@@ -1127,14 +1136,17 @@ onAuthStateChanged(auth,u=>{
   if(S.unsub){S.unsub();S.unsub=null}
   S.notebooks=new Map();S.nbId=null;
   if(!u){S.db=null;S.uid=null;showView('signin');return}
-  S.db=true;S.uid=u.uid;S.ready=true;S.lib=colRef('users/'+u.uid+'/notebooks');
+  S.libLoaded=false;S.db=true;S.uid=u.uid;S.ready=true;S.lib=colRef('users/'+u.uid+'/notebooks');
+  $('#whoami').textContent='Signed in as '+(u.email||'unknown email');
   showView('library');renderLibrary();
   libUnsub=S.lib.onSnapshot(snap=>{
     for(const ch of snap.docChanges()){if(ch.type==='removed')S.notebooks.delete(ch.doc.id);else S.notebooks.set(ch.doc.id,ch.doc.data())}
+    // An empty answer from this device's offline copy doesn't mean the account is empty; wait for the server.
+    if(!(snap.metadata&&snap.metadata.fromCache&&!S.notebooks.size))S.libLoaded=true;
     $('#libNotice').hidden=true;
     if(S.nbId){if(!S.notebooks.has(S.nbId)){toast('This notebook was deleted on another device.');closeNotebook()}else{refreshEditorChrome();scheduleBase()}}
     renderLibrary();
-  },e=>{$('#libNotice').hidden=false;$('#libNotice').textContent=e.code==='permission-denied'?'Firebase is blocking access to your notebooks. Publish the Firestore security rules, then reopen the app.':'Can’t reach your notebooks right now. Check your connection and reopen the app.'});
+  },e=>{$('#libNotice').hidden=false;$('#libNotice').textContent=e.code==='permission-denied'?'Firebase is blocking access to your notebooks. Publish the Firestore security rules, then reopen the app.':'Can’t reach your notebooks right now ('+(e.code||e.message)+'). Check your connection and reopen the app.'});
 });
 })();
 </script>
