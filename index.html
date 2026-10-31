@@ -251,7 +251,7 @@ svg{display:block}
         <button id="mExport" type="button">Save page as image</button>
         <button id="mRename" type="button">Rename notebook</button>
         <button id="mDelPage" class="danger" type="button">Delete this page</button>
-        <div class="lbl" style="text-transform:none;letter-spacing:0">Inkwell version 18</div>
+        <div class="lbl" style="text-transform:none;letter-spacing:0">Inkwell version 19</div>
       </div>
     </div>
   </section>
@@ -937,7 +937,7 @@ function inkToPdf(L,page,strokes,map,k){
     const [lx,ly]=P(n-1),A=map((p[n*3-6]/U+lx)/2,(p[n*3-5]/U+ly)/2),B=map(lx,ly);
     ops.push(setLineWidth(penWidth(st,p[n*3-1]/Q)*k),moveTo(A[0],A[1]),lineTo(B[0],B[1]),stroke());
   }
-  ops.push(popGraphicsState());page.pushOperators(...ops);
+  ops.push(popGraphicsState());for(let i=0;i<ops.length;i+=1000)page.pushOperators(...ops.slice(i,i+1000));
   for(const st of strokes){
     if(st.t!=='h')continue;
     const p=st.p,U=UNITS(st),n=p.length/3;let d='';
@@ -959,23 +959,30 @@ $('#mPdf').onclick=async()=>{
   try{
     progress('Preparing PDF','',0);lock=await wakeLock();
     await loadScript(PDFLIB);const L=window.PDFLib;
-    const out=await L.PDFDocument.create();out.setTitle(nb.title||'Notebook');out.setCreator('Inkwell');
-    let copied=new Map();
-    if(nb.pdfParts){
-      const src=await L.PDFDocument.load(await pdfBytes(id),{ignoreEncryption:true});
-      const want=[...new Set(nb.pages.filter(p=>p.tpl==='pdf'&&p.n).map(p=>p.n-1))].filter(i=>i<src.getPageCount());
-      const pages=await out.copyPages(src,want);want.forEach((i,j)=>copied.set(i+1,pages[j]));
-    }
     const A4W=595.28,A4H=841.89;
+    // For an imported PDF, write onto the original file: drop deleted pages, slot in added ones.
+    // (Copying pages into a new file recurses through the PDF's internals and overflows on long
+    // documents exported from Word.)
+    let out,orig=0;
+    if(nb.pdfParts){
+      out=await L.PDFDocument.load(await pdfBytes(id),{ignoreEncryption:true,updateMetadata:false});
+      orig=out.getPageCount();
+      const ns=nb.pages.filter(p=>p.tpl==='pdf'&&p.n&&p.n<=orig).map(p=>p.n);
+      if(!ns.every((n,i)=>i===0||n>ns[i-1]))throw new Error('pages are out of order');
+      const keep=new Set(ns);for(let i=orig-1;i>=0;i--)if(!keep.has(i+1))out.removePage(i);
+    }else out=await L.PDFDocument.create();
+    out.setTitle(nb.title||'Notebook');out.setCreator('Inkwell');
+    // Walk the notebook in order. Pages 0..i-1 are already in place, so a kept PDF page is at index i;
+    // anything else (a blank page you added) is inserted at i.
     for(let i=0;i<nb.pages.length;i++){
       if(S.nbId!==id)return;
       const pg=nb.pages[i],strokes=S.strokes.get(pg.id)||[];
-      if(pg.tpl==='pdf'&&pg.n&&copied.has(pg.n)){
-        const page=copied.get(pg.n);copied.delete(pg.n);out.addPage(page);
+      if(orig&&pg.tpl==='pdf'&&pg.n&&pg.n<=orig){
+        const page=out.getPage(i);
         const cb=page.getCropBox(),W=cb.width,H=cb.height,r=Math.min(PW/W,PH/H),ox=(PW-W*r)/2,oy=(PH-H*r)/2;
         inkToPdf(L,page,strokes,(x,y)=>[cb.x+(x-ox)/r,cb.y+H-(y-oy)/r],1/r);
       }else{
-        const page=out.addPage([A4W,A4H]);const k=A4W/PW;
+        const page=orig?out.insertPage(i,[A4W,A4H]):out.addPage([A4W,A4H]);const k=A4W/PW;
         if(pg.tpl==='pdf'&&!pg.n){const b=bgFor(pg.id);if(!b.img)await b.ready;const snap=await S.lib.doc(id).collection('bgs').doc(pg.id).get();
           if(snap.exists()){const img=await out.embedJpg(snap.data().img);const r=Math.min(A4W/img.width,A4H/img.height);page.drawImage(img,{x:(A4W-img.width*r)/2,y:(A4H-img.height*r)/2,width:img.width*r,height:img.height*r})}}
         else paperToPdf(L,page,pg.tpl,k,A4H);
